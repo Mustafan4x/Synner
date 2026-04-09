@@ -1,0 +1,11 @@
+Make a way to skip past applied jobs
+Readd rate limiting
+add other job posting platforms
+Make less dependant on machine and my personal info
+Track application success rate per keyword/location combo to prioritize best-performing searches
+Add Greenhouse and Lever portal support for non-LinkedIn applications
+Smart retry queue for failed applications — retry once at end of session before giving up
+Application deduplication across sessions using a persistent seen-jobs database
+Auto-detect and handle LinkedIn CAPTCHA challenges with manual intervention pause
+Dashboard notification system — browser push notifications for applied/failed events
+Resume A/B testing — rotate between resume variants and track which gets more responses
