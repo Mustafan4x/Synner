@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ===== Header ===== -->
+<header class="header">
+  <div class="header__left">
+    <h1 class="header__title">Run Controls</h1>
+    <div id="sessionBadge" class="status-badge status-badge--idle">
+      <span class="status-dot"></span>
+      <span id="sessionStatusText">Idle</span>
+    </div>
+    <span class="elapsed" id="elapsedTime" style="display: none;">00:00:00</span>
+  </div>
+</header>
+
+<!-- ===== Accent Bar ===== -->
+<div class="accent-bar"></div>
+
+<!-- ===== Toast Container ===== -->
+<div id="toastContainer" class="toast-container"></div>
+
+<div class="controls-layout">
+
+  <!-- ===== Run Configuration ===== -->
+  <div class="card controls-panel">
+    <div class="card__header">
+      <h2 class="card__title">Session Configuration</h2>
+    </div>
+
+    <!-- Category Selection -->
+    <div class="field" style="margin-bottom: 20px;">
+      <label class="field__label">Categories to Run</label>
+      <div class="category-checks">
+        <label class="check-field">
+          <input type="checkbox" id="catAll" checked>
+          <span class="check-box"></span>
+          <span class="check-label">All Categories</span>
+        </label>
+        <div class="category-checks__grid">
+          <label class="check-field">
+            <input type="checkbox" class="cat-check" value="SWE" checked>
+            <span class="check-box"></span>
+            <span class="check-label"><span class="cat-card__badge cat-card__badge--SWE">SWE</span></span>
+          </label>
+          <label class="check-field">
+            <input type="checkbox" class="cat-check" value="FS" checked>
+            <span class="check-box"></span>
+            <span class="check-label"><span class="cat-card__badge cat-card__badge--FS">FS</span></span>
+          </label>
+          <label class="check-field">
+            <input type="checkbox" class="cat-check" value="MLAI" checked>
+            <span class="check-box"></span>
+            <span class="check-label"><span class="cat-card__badge cat-card__badge--MLAI">MLAI</span></span>
+          </label>
+          <label class="check-field">
+            <input type="checkbox" class="cat-check" value="DE" checked>
+            <span class="check-box"></span>
+            <span class="check-label"><span class="cat-card__badge cat-card__badge--DE">DE</span></span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Options -->
+    <div class="field" style="margin-bottom: 20px;">
+      <label class="field__label">Options</label>
+      <div class="options-row">
+        <label class="toggle-field">
+          <input type="checkbox" id="optDryRun">
+          <span class="toggle-switch"></span>
+          <span class="toggle-label">Dry run</span>
+        </label>
+        <label class="toggle-field">
+          <input type="checkbox" id="optHeadless" {% if config.headless %}checked{% endif %}>
+          <span class="toggle-switch"></span>
+          <span class="toggle-label">Headless</span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Estimated Duration -->
+    <div class="estimate-card">
+      <div class="estimate-card__icon">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="20" height="20">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div class="estimate-card__body">
+        <div class="estimate-card__label">Estimated Duration</div>
+        <div class="estimate-card__value" id="estimatedDuration">--</div>
+        <div class="estimate-card__detail" id="estimatedDetail"></div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="controls-actions">
+      <button class="btn btn--start" id="startBtn">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" width="18" height="18">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 010 1.972l-11.54 6.347a1.125 1.125 0 01-1.667-.986V5.653z"/>
+        </svg>
+        Start Session
+      </button>
+      <button class="btn btn--stop" id="stopBtn" disabled>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" width="18" height="18">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z"/>
+        </svg>
+        Stop Session
+      </button>
+    </div>
+  </div>
+
+  <!-- ===== Session Info Sidebar ===== -->
+  <div class="controls-info">
+    <!-- Current Config Summary -->
+    <div class="card" style="margin-bottom: 20px;">
+      <div class="card__header">
+        <h2 class="card__title">Current Configuration</h2>
+      </div>
+      <div class="config-summary">
+        <div class="config-summary__row">
+          <span class="config-summary__label">Max per session</span>
+          <span class="config-summary__value font-mono">{{ config.max_applications_per_session }}</span>
+        </div>
+        <div class="config-summary__row">
+          <span class="config-summary__label">Max per category</span>
+          <span class="config-summary__value font-mono">{{ config.max_per_category }}</span>
+        </div>
+        <div class="config-summary__row">
+          <span class="config-summary__label">App delay</span>
+          <span class="config-summary__value font-mono">{{ config.delay_min_seconds }}-{{ config.delay_max_seconds }}s</span>
+        </div>
+        <div class="config-summary__row">
+          <span class="config-summary__label">Search delay</span>
+          <span class="config-summary__value font-mono">{{ config.search_delay_min_seconds }}-{{ config.search_delay_max_seconds }}s</span>
+        </div>
+        <div class="config-summary__row">
+          <span class="config-summary__label">Headless</span>
+          <span class="config-summary__value">{{ 'Yes' if config.headless else 'No' }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session Progress (visible when running) -->
+    <div class="card" id="progressCard" style="display: none;">
+      <div class="card__header">
+        <h2 class="card__title">Session Progress</h2>
+      </div>
+      <div class="session-progress">
+        <div class="session-progress__indicator">
+          <div class="session-progress__spinner"></div>
+          <span class="session-progress__text">Session in Progress</span>
+        </div>
+        <div class="session-progress__elapsed">
+          Elapsed: <span class="font-mono" id="progressElapsed">00:00:00</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Tips -->
+    <div class="card">
+      <div class="card__header">
+        <h2 class="card__title">Quick Tips</h2>
+      </div>
+      <div class="tips-list">
+        <div class="tip-item">
+          <span class="tip-icon">1</span>
+          <span class="tip-text">Use <strong>dry run</strong> to preview matches without submitting applications.</span>
+        </div>
+        <div class="tip-item">
+          <span class="tip-icon">2</span>
+          <span class="tip-text"><strong>Headless mode</strong> runs Chrome invisibly. Disable it if you need to log in.</span>
+        </div>
+        <div class="tip-item">
+          <span class="tip-icon">3</span>
+          <span class="tip-text">Allow at least <strong>4 hours</strong> between sessions to avoid rate limits.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  'use strict';
+
+  var isRunning = false;
+  var startTime = null;
+  var timerInterval = null;
+
+  var startBtn = document.getElementById('startBtn');
+  var stopBtn = document.getElementById('stopBtn');
+  var sessionBadge = document.getElementById('sessionBadge');
+  var sessionStatusText = document.getElementById('sessionStatusText');
+  var elapsedEl = document.getElementById('elapsedTime');
+  var progressCard = document.getElementById('progressCard');
+  var progressElapsed = document.getElementById('progressElapsed');
+
+  // --- Config values for estimation ---
+  var maxSession = {{ config.max_applications_per_session }};
+  var maxCategory = {{ config.max_per_category }};
+  var delayMin = {{ config.delay_min_seconds }};
+  var delayMax = {{ config.delay_max_seconds }};
+  var searchDelayMin = {{ config.search_delay_min_seconds }};
+  var searchDelayMax = {{ config.search_delay_max_seconds }};
+
+  // --- Category checkbox logic ---
+  var catAll = document.getElementById('catAll');
+  var catChecks = document.querySelectorAll('.cat-check');
+
+  catAll.addEventListener('change', function() {
+    catChecks.forEach(function(c) { c.checked = catAll.checked; });
+    updateEstimate();
+  });
+
+  catChecks.forEach(function(c) {
+    c.addEventListener('change', function() {
+      var allChecked = Array.from(catChecks).every(function(cb) { return cb.checked; });
+      var noneChecked = Array.from(catChecks).every(function(cb) { return !cb.checked; });
+      catAll.checked = allChecked;
+      catAll.indeterminate = !allChecked && !noneChecked;
+      updateEstimate();
+    });
+  });
+
+  // --- Estimate duration ---
+  function updateEstimate() {
+    var selected = Array.from(catChecks).filter(function(c) { return c.checked; });
+    var numCats = selected.length;
+    var estimateEl = document.getElementById('estimatedDuration');
+    var detailEl = document.getElementById('estimatedDetail');
+
+    if (numCats === 0) {
+      estimateEl.textContent = '--';
+      detailEl.textContent = 'Select at least one category';
+      return;
+    }
+
+    var totalApps = Math.min(maxSession, numCats * maxCategory);
+    var avgDelay = (delayMin + delayMax) / 2;
+    var avgSearchDelay = (searchDelayMin + searchDelayMax) / 2;
+    // Rough estimate: each app takes avgDelay, plus search delays between categories
+    var totalSeconds = (totalApps * avgDelay) + ((numCats - 1) * avgSearchDelay);
+
+    var hours = Math.floor(totalSeconds / 3600);
+    var mins = Math.floor((totalSeconds % 3600) / 60);
+
+    var parts = [];
+    if (hours > 0) parts.push(hours + 'h');
+    parts.push(mins + 'm');
+    estimateEl.textContent = parts.join(' ');
+    detailEl.textContent = totalApps + ' apps across ' + numCats + ' categories';
+  }
+
+  updateEstimate();
+
+  // --- Toast ---
+  function showToast(message, type) {
+    var container = document.getElementById('toastContainer');
+    var toast = document.createElement('div');
+    toast.className = 'toast toast--' + type;
+    var iconSpan = document.createElement('span');
+    iconSpan.className = 'toast__icon';
+    iconSpan.textContent = type === 'success' ? '\u2713' : type === 'error' ? '\u2717' : '\u26A0';
+    var msgSpan = document.createElement('span');
+    msgSpan.className = 'toast__msg';
+    msgSpan.textContent = message;
+    toast.appendChild(iconSpan);
+    toast.appendChild(msgSpan);
+    container.appendChild(toast);
+    requestAnimationFrame(function() { toast.classList.add('toast--visible'); });
+    setTimeout(function() {
+      toast.classList.remove('toast--visible');
+      setTimeout(function() { toast.remove(); }, 300);
+    }, 4000);
+  }
+
+  // --- Timer ---
+  function formatElapsed(ms) {
+    var secs = Math.floor(ms / 1000);
+    var h = String(Math.floor(secs / 3600)).padStart(2, '0');
+    var m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+    var s = String(secs % 60).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  function startTimer() {
+    startTime = Date.now();
+    elapsedEl.style.display = '';
+    timerInterval = setInterval(function() {
+      var elapsed = formatElapsed(Date.now() - startTime);
+      elapsedEl.textContent = elapsed;
+      progressElapsed.textContent = elapsed;
+    }, 1000);
+  }
+
+  function stopTimer() {
+    clearInterval(timerInterval);
+    timerInterval = null;
+    elapsedEl.style.display = 'none';
+  }
+
+  function setRunningState(running) {
+    isRunning = running;
+    startBtn.disabled = running;
+    stopBtn.disabled = !running;
+    progressCard.style.display = running ? '' : 'none';
+
+    if (running) {
+      sessionBadge.className = 'status-badge status-badge--running';
+      sessionStatusText.textContent = 'Running';
+      startTimer();
+    } else {
+      sessionBadge.className = 'status-badge status-badge--idle';
+      sessionStatusText.textContent = 'Idle';
+      stopTimer();
+    }
+  }
+
+  // --- Check if already running on load ---
+  fetch('/api/status')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.running) { setRunningState(true); }
+    })
+    .catch(function() {});
+
+  // --- Start ---
+  startBtn.addEventListener('click', function() {
+    var selected = Array.from(catChecks).filter(function(c) { return c.checked; }).map(function(c) { return c.value; });
+    if (selected.length === 0) {
+      showToast('Select at least one category', 'warning');
+      return;
+    }
+
+    var body = JSON.stringify({
+      categories: selected,
+      dry_run: document.getElementById('optDryRun').checked,
+      headless: document.getElementById('optHeadless').checked,
+    });
+
+    fetch('/api/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body,
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        setRunningState(true);
+        showToast('Session started', 'success');
+      } else {
+        showToast(data.error || 'Failed to start', 'error');
+      }
+    })
+    .catch(function() {
+      showToast('Network error', 'error');
+    });
+  });
+
+  // --- Stop ---
+  stopBtn.addEventListener('click', function() {
+    fetch('/api/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.success) {
+        setRunningState(false);
+        showToast('Session stopped', 'success');
+      } else {
+        showToast(data.error || 'Failed to stop', 'error');
+      }
+    })
+    .catch(function() {
+      showToast('Network error', 'error');
+    });
+  });
+
+})();
+</script>
+{% endblock %}

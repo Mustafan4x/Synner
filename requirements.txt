@@ -1,0 +1,6 @@
+selenium
+undetected-chromedriver
+openai
+pyyaml
+flask
+pytest

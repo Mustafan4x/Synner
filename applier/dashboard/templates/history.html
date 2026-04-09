@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ===== Header ===== -->
+<header class="header">
+  <div class="header__left">
+    <h1 class="header__title">Session History</h1>
+    <span class="header__subtitle">{{ rows | length }} records</span>
+  </div>
+  <div class="header__right">
+    <button class="btn btn--outline" id="exportBtn" title="Export filtered results as CSV">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="16" height="16">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+      </svg>
+      Export CSV
+    </button>
+  </div>
+</header>
+
+<!-- ===== Accent Bar ===== -->
+<div class="accent-bar"></div>
+
+<!-- ===== Aggregate Stats ===== -->
+<div class="grid grid--top" style="margin-bottom: 24px;">
+  <div class="card stat-card stat-card--applied">
+    <div class="stat-card__number">{{ stats.total }}</div>
+    <div class="stat-card__label">Total Applications</div>
+    <div class="stat-card__alltime">{{ stats.success_rate }}% success rate</div>
+  </div>
+  <div class="card stat-card stat-card--skipped">
+    <div class="stat-card__number">{{ stats.top_companies | length }}</div>
+    <div class="stat-card__label">Unique Companies</div>
+    <div class="stat-card__alltime">
+      Top: {% for c in stats.top_companies[:3] %}{{ c[0] }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+  </div>
+  <div class="card stat-card stat-card--failed">
+    <div class="stat-card__number">{{ stats.top_locations | length }}</div>
+    <div class="stat-card__label">Unique Locations</div>
+    <div class="stat-card__alltime">
+      Top: {% for l in stats.top_locations[:3] %}{{ l[0] }}{% if not loop.last %}, {% endif %}{% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- ===== Filter Controls ===== -->
+<div class="card filter-bar" style="margin-bottom: 20px;">
+  <div class="filter-bar__row">
+    <div class="filter-group">
+      <label class="filter-label">Category</label>
+      <div class="filter-chips" id="filterCategory">
+        <button class="chip chip--active" data-value="all">All</button>
+        <button class="chip" data-value="SWE">SWE</button>
+        <button class="chip" data-value="FS">FS</button>
+        <button class="chip" data-value="MLAI">MLAI</button>
+        <button class="chip" data-value="DE">DE</button>
+      </div>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Status</label>
+      <div class="filter-chips" id="filterStatus">
+        <button class="chip chip--active" data-value="all">All</button>
+        <button class="chip" data-value="applied">Applied</button>
+        <button class="chip" data-value="skipped">Skipped</button>
+        <button class="chip" data-value="failed">Failed</button>
+      </div>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Date Range</label>
+      <div class="filter-dates">
+        <input type="date" id="filterDateFrom" class="input input--sm" placeholder="From">
+        <span class="filter-date-sep">to</span>
+        <input type="date" id="filterDateTo" class="input input--sm" placeholder="To">
+      </div>
+    </div>
+    <div class="filter-group">
+      <label class="filter-label">Search</label>
+      <input type="text" id="filterSearch" class="input input--sm" placeholder="Company, title..." style="width: 180px;">
+    </div>
+  </div>
+</div>
+
+<!-- ===== Data Table ===== -->
+<div class="card" style="padding: 0; overflow: hidden;">
+  <div class="table-wrap">
+    <table class="data-table" id="historyTable">
+      <thead>
+        <tr>
+          <th class="sortable" data-col="0">Date <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="1">Category <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="2">Company <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="3">Title <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="4">Location <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="5">Status <span class="sort-icon"></span></th>
+          <th class="sortable" data-col="6">Reason <span class="sort-icon"></span></th>
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        {% for row in rows %}
+        <tr data-category="{{ row.category }}" data-status="{{ row.status | lower }}" data-date="{{ row.date[:10] }}">
+          <td class="font-mono">{{ row.date }}</td>
+          <td><span class="cat-card__badge cat-card__badge--{{ row.category }}">{{ row.category }}</span></td>
+          <td>{{ row.company }}</td>
+          <td>{{ row.title }}</td>
+          <td>{{ row.location }}</td>
+          <td>
+            <span class="status-pill status-pill--{{ row.status | lower }}">{{ row.status }}</span>
+          </td>
+          <td class="cell-reason">{{ row.reason or '---' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="table-footer" id="tableFooter">
+    <span id="filteredCount">{{ rows | length }}</span> of {{ rows | length }} records shown
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  'use strict';
+
+  var table = document.getElementById('historyTable');
+  var tbody = document.getElementById('tableBody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  var totalRows = rows.length;
+
+  // --- Filters ---
+  var activeCategory = 'all';
+  var activeStatus = 'all';
+
+  function setupChips(containerId, callback) {
+    var container = document.getElementById(containerId);
+    var chips = container.querySelectorAll('.chip');
+    chips.forEach(function(chip) {
+      chip.addEventListener('click', function() {
+        chips.forEach(function(c) { c.classList.remove('chip--active'); });
+        chip.classList.add('chip--active');
+        callback(chip.dataset.value);
+      });
+    });
+  }
+
+  setupChips('filterCategory', function(val) { activeCategory = val; applyFilters(); });
+  setupChips('filterStatus', function(val) { activeStatus = val; applyFilters(); });
+
+  document.getElementById('filterDateFrom').addEventListener('change', applyFilters);
+  document.getElementById('filterDateTo').addEventListener('change', applyFilters);
+  document.getElementById('filterSearch').addEventListener('input', applyFilters);
+
+  function applyFilters() {
+    var dateFrom = document.getElementById('filterDateFrom').value;
+    var dateTo = document.getElementById('filterDateTo').value;
+    var search = document.getElementById('filterSearch').value.toLowerCase();
+    var shown = 0;
+
+    rows.forEach(function(row) {
+      var cat = row.dataset.category;
+      var status = row.dataset.status;
+      var date = row.dataset.date;
+      var text = row.textContent.toLowerCase();
+
+      var visible = true;
+      if (activeCategory !== 'all' && cat !== activeCategory) visible = false;
+      if (activeStatus !== 'all' && status !== activeStatus) visible = false;
+      if (dateFrom && date < dateFrom) visible = false;
+      if (dateTo && date > dateTo) visible = false;
+      if (search && text.indexOf(search) === -1) visible = false;
+
+      row.style.display = visible ? '' : 'none';
+      if (visible) shown++;
+    });
+
+    document.getElementById('filteredCount').textContent = shown;
+  }
+
+  // --- Sorting ---
+  var sortCol = -1;
+  var sortAsc = true;
+  var headers = table.querySelectorAll('th.sortable');
+
+  headers.forEach(function(th) {
+    th.addEventListener('click', function() {
+      var col = parseInt(th.dataset.col);
+      if (sortCol === col) {
+        sortAsc = !sortAsc;
+      } else {
+        sortCol = col;
+        sortAsc = true;
+      }
+
+      headers.forEach(function(h) { h.classList.remove('sort-asc', 'sort-desc'); });
+      th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
+
+      rows.sort(function(a, b) {
+        var aVal = a.children[col].textContent.trim().toLowerCase();
+        var bVal = b.children[col].textContent.trim().toLowerCase();
+        if (aVal < bVal) return sortAsc ? -1 : 1;
+        if (aVal > bVal) return sortAsc ? 1 : -1;
+        return 0;
+      });
+
+      rows.forEach(function(row) { tbody.appendChild(row); });
+    });
+  });
+
+  // --- Export ---
+  document.getElementById('exportBtn').addEventListener('click', function() {
+    var csvContent = 'Date,Category,Company,Title,Location,Status,Reason\n';
+    rows.forEach(function(row) {
+      if (row.style.display === 'none') return;
+      var cells = row.querySelectorAll('td');
+      var line = [];
+      cells.forEach(function(cell) {
+        var val = cell.textContent.trim().replace(/"/g, '""');
+        line.push('"' + val + '"');
+      });
+      csvContent += line.join(',') + '\n';
+    });
+
+    var blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'synner_history_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+})();
+</script>
+{% endblock %}

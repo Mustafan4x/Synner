@@ -1,0 +1,546 @@
+"""Flask application entry point for the Synner dashboard."""
+
+from __future__ import annotations
+
+import csv
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+from collections import Counter
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Generator
+import random
+
+import yaml
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template,
+    request,
+)
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_CSV_PATH = _PROJECT_ROOT / "applications.csv"
+_CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
+_RUN_SCRIPT = _PROJECT_ROOT / "run.py"
+
+# ---------------------------------------------------------------------------
+# Subprocess management
+# ---------------------------------------------------------------------------
+
+_process_lock = threading.Lock()
+_current_process: subprocess.Popen | None = None
+
+
+def _is_process_running() -> bool:
+    """Check whether the managed subprocess is still alive."""
+    with _process_lock:
+        if _current_process is None:
+            return False
+        return _current_process.poll() is None
+
+
+# ---------------------------------------------------------------------------
+# CSV helpers
+# ---------------------------------------------------------------------------
+
+_CSV_COLUMNS = ["date", "category", "company", "title", "location", "status", "reason", "linkedin_url"]
+
+
+def _read_csv() -> list[dict]:
+    """Read applications.csv and return a list of row dicts."""
+    if not _CSV_PATH.exists():
+        return []
+    rows: list[dict] = []
+    with open(_CSV_PATH, "r", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            rows.append(row)
+    return rows
+
+
+def _compute_stats(rows: list[dict]) -> dict:
+    """Compute aggregate statistics from CSV rows."""
+    total = len(rows)
+    applied = sum(1 for r in rows if r.get("status", "").lower() in ("applied", "APPLIED"))
+    success_rate = round(applied / total * 100) if total > 0 else 0
+
+    companies = Counter(r.get("company", "") for r in rows if r.get("company"))
+    locations = Counter(r.get("location", "") for r in rows if r.get("location"))
+
+    return {
+        "total": total,
+        "applied": applied,
+        "success_rate": success_rate,
+        "top_companies": companies.most_common(10),
+        "top_locations": locations.most_common(10),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_config() -> dict:
+    """Load config.yaml, returning defaults if missing."""
+    if not _CONFIG_PATH.exists():
+        return {
+            "openai_api_key": "sk-...",
+            "linkedin_profile_dir": "./chrome_profile",
+            "resume_dir": "~/Documents/resumes/pdfs",
+            "max_applications_per_session": 100,
+            "max_per_category": 30,
+            "delay_min_seconds": 30,
+            "delay_max_seconds": 60,
+            "search_delay_min_seconds": 120,
+            "search_delay_max_seconds": 300,
+            "headless": False,
+        }
+    with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def _save_config(data: dict) -> None:
+    """Write configuration dict to config.yaml with comments."""
+    lines = [
+        "# Synner configuration file",
+        "# Copy this file and fill in your actual values",
+        "",
+        "# OpenAI API key for GPT-4o-mini screening question answers",
+        f'openai_api_key: "{data.get("openai_api_key", "sk-...")}"',
+        "",
+        "# Path to Chrome profile directory for persisted LinkedIn session",
+        f'linkedin_profile_dir: "{data.get("linkedin_profile_dir", "./chrome_profile")}"',
+        "",
+        "# Directory containing resume PDF files",
+        f'resume_dir: "{data.get("resume_dir", "~/Documents/resumes/pdfs")}"',
+        "",
+        "# Maximum total applications to submit in one session",
+        f'max_applications_per_session: {data.get("max_applications_per_session", 100)}',
+        "",
+        "# Maximum applications per role category (SWE, FS, MLAI, DE) per session",
+        f'max_per_category: {data.get("max_per_category", 30)}',
+        "",
+        "# Minimum delay (seconds) between individual applications",
+        f'delay_min_seconds: {data.get("delay_min_seconds", 30)}',
+        "",
+        "# Maximum delay (seconds) between individual applications",
+        f'delay_max_seconds: {data.get("delay_max_seconds", 60)}',
+        "",
+        "# Minimum delay (seconds) between search queries",
+        f'search_delay_min_seconds: {data.get("search_delay_min_seconds", 120)}',
+        "",
+        "# Maximum delay (seconds) between search queries",
+        f'search_delay_max_seconds: {data.get("search_delay_max_seconds", 300)}',
+        "",
+        "# Set true to run Chrome without a visible browser window",
+        f'headless: {"true" if data.get("headless") else "false"}',
+        "",
+    ]
+    with open(_CONFIG_PATH, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Resume map (from config module)
+# ---------------------------------------------------------------------------
+
+RESUME_MAP = {
+    "SWE": "Resume_SWE.pdf",
+    "FS": "Resume_FS.pdf",
+    "MLAI": "Resume_MLAI.pdf",
+    "DE": "Resume_DE.pdf",
+}
+
+
+# ---------------------------------------------------------------------------
+# Mock data generator (kept for dashboard when no CSV exists)
+# ---------------------------------------------------------------------------
+
+_COMPANIES = [
+    "Capital One", "Toyota", "AT&T", "Lockheed Martin", "Texas Instruments",
+    "JPMorgan Chase", "Goldman Sachs", "Meta", "Google", "Amazon",
+    "Microsoft", "Cisco", "Dell", "Oracle", "Salesforce",
+    "Deloitte", "Accenture", "NVIDIA", "Apple", "IBM",
+]
+
+_TITLES = {
+    "SWE": [
+        "Junior Software Engineer", "Software Engineer Intern",
+        "Software Developer I", "Associate Software Engineer",
+        "Software Engineer New Grad",
+    ],
+    "FS": [
+        "Fullstack Developer", "Full Stack Engineer Intern",
+        "Junior Web Developer", "Fullstack Engineer",
+    ],
+    "MLAI": [
+        "ML Engineer Intern", "Data Scientist Junior",
+        "AI Engineer Entry Level", "Machine Learning Intern",
+    ],
+    "DE": [
+        "Data Engineer Intern", "Junior Data Engineer",
+        "ETL Developer", "Data Pipeline Engineer",
+    ],
+}
+
+_LOCATIONS = [
+    "Dallas, TX", "Fort Worth, TX", "Arlington, TX", "Plano, TX",
+    "Frisco, TX", "Irving, TX", "Richardson, TX", "Remote",
+]
+
+_SKIP_REASONS = [
+    "title blacklist: senior", "title blacklist: staff",
+    "title blacklist: lead", "already applied",
+    "description: 5+ years required",
+]
+
+_FAIL_REASONS = [
+    "form error: required field missing",
+    "form error: upload timeout",
+    "modal blocked submission",
+    "network timeout",
+]
+
+
+def _build_mock_data() -> dict:
+    """Generate realistic placeholder data for the dashboard."""
+    random.seed(42)
+
+    session = {"applied": 68, "skipped": 18, "failed": 4, "total": 90}
+    alltime = {"applied": 312, "skipped": 87, "failed": 19, "total": 418}
+    trends = {"applied": 12.7, "skipped": -5.3, "failed": -34.5}
+
+    categories = {
+        "SWE": {"applied": 23, "skipped": 4, "failed": 1, "limit": 30},
+        "FS":  {"applied": 18, "skipped": 6, "failed": 0, "limit": 30},
+        "MLAI": {"applied": 12, "skipped": 3, "failed": 2, "limit": 30},
+        "DE":  {"applied": 15, "skipped": 5, "failed": 1, "limit": 30},
+    }
+
+    feed = []
+    base_time = datetime(2026, 4, 8, 14, 30, 0)
+    statuses = ["applied"] * 12 + ["skipped"] * 4 + ["failed"] * 2
+    random.shuffle(statuses)
+
+    for i, status in enumerate(statuses):
+        cat = random.choice(["SWE", "FS", "MLAI", "DE"])
+        company = random.choice(_COMPANIES)
+        title = random.choice(_TITLES[cat])
+        location = random.choice(_LOCATIONS)
+        ts = base_time + timedelta(seconds=i * random.randint(35, 70))
+
+        reason = ""
+        if status == "skipped":
+            reason = random.choice(_SKIP_REASONS)
+        elif status == "failed":
+            reason = random.choice(_FAIL_REASONS)
+
+        feed.append({
+            "time": ts.strftime("%I:%M %p"),
+            "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+            "category": cat,
+            "company": company,
+            "title": title,
+            "location": location,
+            "status": status,
+            "reason": reason,
+        })
+
+    feed.reverse()
+
+    success_rate = round(
+        session["applied"] / session["total"] * 100
+    ) if session["total"] > 0 else 0
+
+    radar = {}
+    for cat, vals in categories.items():
+        radar[cat] = round(vals["applied"] / vals["limit"], 2)
+
+    return {
+        "session": session,
+        "alltime": alltime,
+        "trends": trends,
+        "categories": categories,
+        "feed": feed,
+        "success_rate": success_rate,
+        "radar": radar,
+        "status": "running",
+        "session_elapsed": "01:23:45",
+        "user": "Mustafa Nazeer",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Flask app factory
+# ---------------------------------------------------------------------------
+
+
+def create_app() -> Flask:
+    """Create and configure the Flask application."""
+    app = Flask(
+        __name__,
+        static_folder="static",
+        template_folder="templates",
+    )
+    app.secret_key = os.urandom(24)
+
+    # ── Dashboard ─────────────────────────────────────────────────────────
+
+    @app.route("/")
+    def dashboard() -> str:
+        """Serve the main dashboard page with mock data."""
+        return render_template(
+            "dashboard.html",
+            data=_build_mock_data(),
+            active_page="dashboard",
+        )
+
+    @app.route("/api/feed")
+    def api_feed() -> tuple:
+        """Return the live feed entries as JSON."""
+        data = _build_mock_data()
+        return jsonify(data["feed"])
+
+    @app.route("/api/stats")
+    def api_stats() -> tuple:
+        """Return current stats as JSON."""
+        data = _build_mock_data()
+        return jsonify({
+            "session": data["session"],
+            "alltime": data["alltime"],
+            "categories": data["categories"],
+        })
+
+    # ── History ───────────────────────────────────────────────────────────
+
+    @app.route("/history")
+    def history() -> str:
+        """Serve the session history page."""
+        rows = _read_csv()
+        stats = _compute_stats(rows)
+        return render_template(
+            "history.html",
+            rows=rows,
+            stats=stats,
+            active_page="history",
+        )
+
+    # ── Settings ──────────────────────────────────────────────────────────
+
+    @app.route("/settings", methods=["GET", "POST"])
+    def settings():
+        """Display or save configuration."""
+        if request.method == "POST":
+            try:
+                config = _load_config()
+                # Update from form data
+                config["openai_api_key"] = request.form.get(
+                    "openai_api_key", config.get("openai_api_key", "")
+                )
+                config["delay_min_seconds"] = int(
+                    request.form.get("delay_min_seconds", 30)
+                )
+                config["delay_max_seconds"] = int(
+                    request.form.get("delay_max_seconds", 60)
+                )
+                config["search_delay_min_seconds"] = int(
+                    request.form.get("search_delay_min_seconds", 120)
+                )
+                config["search_delay_max_seconds"] = int(
+                    request.form.get("search_delay_max_seconds", 300)
+                )
+                config["max_applications_per_session"] = int(
+                    request.form.get("max_applications_per_session", 100)
+                )
+                config["max_per_category"] = int(
+                    request.form.get("max_per_category", 30)
+                )
+                config["headless"] = "headless" in request.form
+
+                _save_config(config)
+                return jsonify({"success": True})
+            except Exception as exc:
+                return jsonify({"success": False, "error": str(exc)})
+
+        config = _load_config()
+        return render_template(
+            "settings.html",
+            config=config,
+            resume_map=RESUME_MAP,
+            flash_msg=None,
+            flash_type=None,
+            active_page="settings",
+        )
+
+    # ── Controls ──────────────────────────────────────────────────────────
+
+    @app.route("/controls")
+    def controls() -> str:
+        """Serve the run controls page."""
+        config = _load_config()
+        return render_template(
+            "controls.html",
+            config=config,
+            active_page="controls",
+        )
+
+    @app.route("/api/start", methods=["POST"])
+    def api_start():
+        """Start run.py as a subprocess."""
+        global _current_process
+        with _process_lock:
+            if _current_process is not None and _current_process.poll() is None:
+                return jsonify({"success": False, "error": "Session already running"})
+
+            body = request.get_json(silent=True) or {}
+            categories = body.get("categories", [])
+            dry_run = body.get("dry_run", False)
+            headless = body.get("headless", False)
+
+            cmd = [sys.executable, str(_RUN_SCRIPT)]
+            if len(categories) == 1:
+                cmd.extend(["--category", categories[0]])
+            if dry_run:
+                cmd.append("--dry-run")
+            if headless:
+                cmd.append("--headless")
+
+            try:
+                _current_process = subprocess.Popen(
+                    cmd,
+                    cwd=str(_PROJECT_ROOT),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return jsonify({"success": True, "pid": _current_process.pid})
+            except Exception as exc:
+                return jsonify({"success": False, "error": str(exc)})
+
+    @app.route("/api/stop", methods=["POST"])
+    def api_stop():
+        """Stop the running subprocess."""
+        global _current_process
+        with _process_lock:
+            if _current_process is None or _current_process.poll() is not None:
+                _current_process = None
+                return jsonify({"success": True, "message": "No session running"})
+
+            try:
+                _current_process.send_signal(signal.SIGINT)
+                try:
+                    _current_process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    _current_process.kill()
+                    _current_process.wait(timeout=5)
+                _current_process = None
+                return jsonify({"success": True})
+            except Exception as exc:
+                return jsonify({"success": False, "error": str(exc)})
+
+    @app.route("/api/status")
+    def api_status():
+        """Return current process status."""
+        running = _is_process_running()
+        return jsonify({"running": running})
+
+    # ── SSE Stream ────────────────────────────────────────────────────────
+
+    @app.route("/api/stream")
+    def api_stream():
+        """Server-Sent Events endpoint that tails applications.csv."""
+
+        def generate() -> Generator[str, None, None]:
+            # Send initial keepalive
+            yield "event: connected\ndata: {}\n\n"
+
+            last_size = 0
+            if _CSV_PATH.exists():
+                last_size = _CSV_PATH.stat().st_size
+
+            while True:
+                time.sleep(1)
+
+                if not _CSV_PATH.exists():
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+                    continue
+
+                current_size = _CSV_PATH.stat().st_size
+                if current_size <= last_size:
+                    # Send keepalive every ~15 seconds
+                    yield ": keepalive\n\n"
+                    continue
+
+                # Read new lines
+                try:
+                    with open(_CSV_PATH, "r", newline="", encoding="utf-8") as fh:
+                        fh.seek(last_size)
+                        new_data = fh.read()
+
+                    last_size = current_size
+
+                    for line in new_data.strip().split("\n"):
+                        if not line.strip():
+                            continue
+                        parts = list(csv.reader([line]))[0]
+                        if len(parts) >= 7 and parts[0] != "date":
+                            entry = {
+                                "date": parts[0],
+                                "category": parts[1],
+                                "company": parts[2],
+                                "title": parts[3],
+                                "location": parts[4],
+                                "status": parts[5].lower(),
+                                "reason": parts[6] if len(parts) > 6 else "",
+                                "time": "",
+                            }
+                            # Parse time for display
+                            try:
+                                dt = datetime.strptime(parts[0], "%Y-%m-%d %H:%M:%S")
+                                entry["time"] = dt.strftime("%I:%M %p")
+                            except ValueError:
+                                entry["time"] = parts[0]
+
+                            yield "event: activity\ndata: " + json.dumps(entry) + "\n\n"
+                except Exception:
+                    pass
+
+        return Response(
+            generate(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
+    return app
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    """Run the dashboard server."""
+    app = create_app()
+    print("\n  Synner Dashboard running at http://127.0.0.1:5050\n")
+    app.run(host="127.0.0.1", port=5050, debug=True, threaded=True)
+
+
+if __name__ == "__main__":
+    main()

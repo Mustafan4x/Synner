@@ -1,0 +1,460 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ===== Header ===== -->
+<header class="header">
+  <div class="header__left">
+    <h1 class="header__title">Dashboard</h1>
+    <div class="status-badge status-badge--{{ data.status }}">
+      <span class="status-dot"></span>
+      {{ data.status | capitalize }}
+    </div>
+    <span class="elapsed">{{ data.session_elapsed }}</span>
+    <span id="sseStatus" class="sse-dot sse-dot--disconnected" title="Connecting..."></span>
+  </div>
+  <div class="header__right">
+    <div class="profile">
+      <div class="profile__avatar">{{ data.user[0] }}</div>
+      <div class="profile__name-wrap">
+        <div class="profile__name">{{ data.user }}</div>
+        <div class="profile__role">Synner Pro</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ===== Accent Bar ===== -->
+<div class="accent-bar"></div>
+
+<!-- ===== Stat Cards Row ===== -->
+<div class="grid grid--top">
+  <!-- Applied -->
+  <div class="card stat-card stat-card--applied">
+    <div class="stat-card__number">{{ data.session.applied }}</div>
+    <div class="stat-card__sub">
+      <span class="stat-card__max">/{{ data.alltime.applied }}</span>
+      {% if data.trends.applied > 0 %}
+        <span class="trend trend--up">
+          <span class="trend__arrow">&#x25B2;</span>
+          +{{ data.trends.applied }}%
+        </span>
+      {% else %}
+        <span class="trend trend--down">
+          <span class="trend__arrow">&#x25BC;</span>
+          {{ data.trends.applied }}%
+        </span>
+      {% endif %}
+    </div>
+    <div class="stat-card__label">Applied this session</div>
+    <div class="stat-card__alltime">{{ data.alltime.applied }} all-time</div>
+  </div>
+
+  <!-- Skipped -->
+  <div class="card stat-card stat-card--skipped">
+    <div class="stat-card__number">{{ data.session.skipped }}</div>
+    <div class="stat-card__sub">
+      <span class="stat-card__max">/{{ data.alltime.skipped }}</span>
+      {% if data.trends.skipped > 0 %}
+        <span class="trend trend--up">
+          <span class="trend__arrow">&#x25B2;</span>
+          +{{ data.trends.skipped }}%
+        </span>
+      {% else %}
+        <span class="trend trend--down">
+          <span class="trend__arrow">&#x25BC;</span>
+          {{ data.trends.skipped }}%
+        </span>
+      {% endif %}
+    </div>
+    <div class="stat-card__label">Skipped this session</div>
+    <div class="stat-card__alltime">{{ data.alltime.skipped }} all-time</div>
+  </div>
+
+  <!-- Failed -->
+  <div class="card stat-card stat-card--failed">
+    <div class="stat-card__number">{{ data.session.failed }}</div>
+    <div class="stat-card__sub">
+      <span class="stat-card__max">/{{ data.alltime.failed }}</span>
+      {% if data.trends.failed > 0 %}
+        <span class="trend trend--up">
+          <span class="trend__arrow">&#x25B2;</span>
+          +{{ data.trends.failed }}%
+        </span>
+      {% else %}
+        <span class="trend trend--down">
+          <span class="trend__arrow">&#x25BC;</span>
+          {{ data.trends.failed }}%
+        </span>
+      {% endif %}
+    </div>
+    <div class="stat-card__label">Failed this session</div>
+    <div class="stat-card__alltime">{{ data.alltime.failed }} all-time</div>
+  </div>
+</div>
+
+<!-- ===== Motivational Banner ===== -->
+<div class="banner">
+  <div class="banner__icon">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z"/>
+    </svg>
+  </div>
+  <div class="banner__text">
+    You've applied to <strong>{{ data.session.applied }} jobs</strong> this session across {{ data.categories | length }} categories.
+    Keeping a {{ data.success_rate }}% success rate. Keep it up!
+  </div>
+</div>
+
+<!-- ===== Main Grid: Feed + Score/Radar ===== -->
+<div class="grid grid--main">
+
+  <!-- Left Column: Categories + Feed -->
+  <div>
+    <!-- Category Breakdown -->
+    <div class="card" style="margin-bottom: 20px;">
+      <div class="card__header">
+        <h2 class="card__title">Category Breakdown</h2>
+      </div>
+      <div class="grid--categories">
+        {% for cat, vals in data.categories.items() %}
+        <div class="card cat-card">
+          <div class="cat-card__header">
+            <div class="cat-card__name">
+              <span class="cat-card__badge cat-card__badge--{{ cat }}">{{ cat }}</span>
+            </div>
+            <div class="cat-card__fraction">
+              {{ vals.applied }}<span>/{{ vals.limit }}</span>
+            </div>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-bar__fill progress-bar__fill--{{ cat }}"
+                 style="width: {{ (vals.applied / vals.limit * 100) | round(1) }}%"></div>
+          </div>
+          <div class="cat-card__stats">
+            <span class="cat-card__stat">
+              <span class="cat-card__dot cat-card__dot--applied"></span>
+              {{ vals.applied }} applied
+            </span>
+            <span class="cat-card__stat">
+              <span class="cat-card__dot cat-card__dot--skipped"></span>
+              {{ vals.skipped }} skipped
+            </span>
+            <span class="cat-card__stat">
+              <span class="cat-card__dot cat-card__dot--failed"></span>
+              {{ vals.failed }} failed
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Live Activity Feed -->
+    <div class="card">
+      <div class="card__header">
+        <h2 class="card__title">Today's Activity</h2>
+        <button class="sort-btn">Sort &#x25BE;</button>
+      </div>
+      <div class="feed" id="liveFeed">
+        {% for entry in data.feed %}
+        <div class="feed__item">
+          <!-- Status icon -->
+          <div class="feed__icon feed__icon--{{ entry.status }}">
+            {% if entry.status == 'applied' %}
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+            </svg>
+            {% elif entry.status == 'skipped' %}
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 8.689c0-.864.933-1.405 1.683-.977l7.108 4.062a1.125 1.125 0 010 1.953l-7.108 4.062A1.125 1.125 0 013 16.81V8.69zM12.75 8.689c0-.864.933-1.405 1.683-.977l7.108 4.062a1.125 1.125 0 010 1.953l-7.108 4.062a1.125 1.125 0 01-1.683-.977V8.69z"/>
+            </svg>
+            {% else %}
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            {% endif %}
+          </div>
+
+          <div class="feed__body">
+            <div class="feed__title">{{ entry.title }} @ {{ entry.company }}</div>
+            <div class="feed__meta">
+              <span class="feed__cat">{{ entry.category }}</span>
+              <span>{{ entry.location }}</span>
+            </div>
+            {% if entry.reason %}
+            <div class="feed__reason">{{ entry.reason }}</div>
+            {% endif %}
+          </div>
+
+          <div class="feed__time">{{ entry.time }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Column: Score + Radar + Breakdown -->
+  <div>
+    <!-- Success Rate -->
+    <div class="card score-section" style="margin-bottom: 20px;">
+      <div class="card__header" style="justify-content: center;">
+        <h2 class="card__title">Success Rate</h2>
+      </div>
+      <div class="score__number">{{ data.success_rate }}%</div>
+      <div class="score__label">Application Success</div>
+      <div class="score__sublabel">{{ data.session.applied }} of {{ data.session.total }} attempts</div>
+
+      <!-- Radar Chart -->
+      <div class="radar-wrap">
+        <canvas id="radarChart" width="260" height="260"></canvas>
+      </div>
+
+      <!-- Category Breakdown List -->
+      <div class="breakdown">
+        <h3 class="breakdown__title">Distribution</h3>
+        {% set colors = {'SWE': '#3B82F6', 'FS': '#8B5CF6', 'MLAI': '#F59E0B', 'DE': '#10B981'} %}
+        {% for cat, val in data.radar.items() %}
+        <div class="breakdown__item">
+          <div class="breakdown__left">
+            <span class="breakdown__dot" style="background: {{ colors[cat] }};"></span>
+            <span class="breakdown__cat">{{ cat }}</span>
+          </div>
+          <span class="breakdown__val">{{ (val * 100) | round(0) | int }}%</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  'use strict';
+
+  // --- Radar Chart (Canvas) ---
+  var canvas = document.getElementById('radarChart');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var size = 260;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = size + 'px';
+  canvas.style.height = size + 'px';
+  ctx.scale(dpr, dpr);
+
+  var cx = size / 2;
+  var cy = size / 2;
+  var maxR = 100;
+
+  var labels = {{ data.radar.keys() | list | tojson }};
+  var values = {{ data.radar.values() | list | tojson }};
+  var n = labels.length;
+  var angleStep = (2 * Math.PI) / n;
+  var startAngle = -Math.PI / 2;
+
+  function pointOnCircle(cx, cy, r, angle) {
+    return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
+  }
+
+  // Draw grid rings
+  var rings = [0.25, 0.5, 0.75, 1.0];
+  ctx.strokeStyle = '#E5E0DA';
+  ctx.lineWidth = 1;
+  for (var ri = 0; ri < rings.length; ri++) {
+    var r = maxR * rings[ri];
+    ctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var a = startAngle + i * angleStep;
+      var p = pointOnCircle(cx, cy, r, a);
+      if (i === 0) ctx.moveTo(p[0], p[1]);
+      else ctx.lineTo(p[0], p[1]);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // Draw axes
+  ctx.strokeStyle = '#D5D0CA';
+  ctx.lineWidth = 1;
+  for (var i = 0; i < n; i++) {
+    var a = startAngle + i * angleStep;
+    var p = pointOnCircle(cx, cy, maxR, a);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(p[0], p[1]);
+    ctx.stroke();
+  }
+
+  // Draw data polygon with gradient fill
+  ctx.beginPath();
+  for (var i = 0; i < n; i++) {
+    var a = startAngle + i * angleStep;
+    var r = maxR * values[i];
+    var p = pointOnCircle(cx, cy, r, a);
+    if (i === 0) ctx.moveTo(p[0], p[1]);
+    else ctx.lineTo(p[0], p[1]);
+  }
+  ctx.closePath();
+
+  // Gradient fill matching design.webp purple-to-gold mesh
+  var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+  grad.addColorStop(0, 'rgba(168, 85, 247, 0.35)');
+  grad.addColorStop(0.5, 'rgba(251, 191, 36, 0.25)');
+  grad.addColorStop(1, 'rgba(244, 114, 182, 0.20)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Stroke the polygon
+  var strokeGrad = ctx.createLinearGradient(cx - maxR, cy, cx + maxR, cy);
+  strokeGrad.addColorStop(0, '#A855F7');
+  strokeGrad.addColorStop(0.5, '#FBBF24');
+  strokeGrad.addColorStop(1, '#F472B6');
+  ctx.strokeStyle = strokeGrad;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Draw data points
+  var dotColors = ['#3B82F6', '#8B5CF6', '#F59E0B', '#10B981'];
+  for (var i = 0; i < n; i++) {
+    var a = startAngle + i * angleStep;
+    var r = maxR * values[i];
+    var p = pointOnCircle(cx, cy, r, a);
+    ctx.beginPath();
+    ctx.arc(p[0], p[1], 4, 0, 2 * Math.PI);
+    ctx.fillStyle = dotColors[i % dotColors.length];
+    ctx.fill();
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Draw labels
+  ctx.fillStyle = '#6B6560';
+  ctx.font = '500 12px "DM Sans", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (var i = 0; i < n; i++) {
+    var a = startAngle + i * angleStep;
+    var p = pointOnCircle(cx, cy, maxR + 18, a);
+    ctx.fillText(labels[i], p[0], p[1]);
+  }
+
+  // --- SSE Real-time Updates ---
+  (function initSSE() {
+    var feedEl = document.getElementById('liveFeed');
+    var statusIndicator = document.getElementById('sseStatus');
+    var evtSource = null;
+
+    function connect() {
+      evtSource = new EventSource('/api/stream');
+
+      evtSource.onopen = function() {
+        if (statusIndicator) {
+          statusIndicator.className = 'sse-dot sse-dot--connected';
+          statusIndicator.title = 'Live connected';
+        }
+      };
+
+      evtSource.addEventListener('activity', function(e) {
+        try {
+          var entry = JSON.parse(e.data);
+          if (!feedEl) return;
+
+          // Build feed item using safe DOM methods
+          var item = document.createElement('div');
+          item.className = 'feed__item';
+          item.style.animation = 'feed-in 0.35s var(--ease-out) both';
+
+          // Status icon container
+          var iconDiv = document.createElement('div');
+          var safeStatus = ['applied', 'skipped', 'failed'].indexOf(entry.status) !== -1 ? entry.status : 'failed';
+          iconDiv.className = 'feed__icon feed__icon--' + safeStatus;
+
+          // Create SVG icon via namespace
+          var svgNS = 'http://www.w3.org/2000/svg';
+          var svg = document.createElementNS(svgNS, 'svg');
+          svg.setAttribute('fill', 'none');
+          svg.setAttribute('viewBox', '0 0 24 24');
+          svg.setAttribute('stroke', 'currentColor');
+          svg.setAttribute('stroke-width', '2');
+          var path = document.createElementNS(svgNS, 'path');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+          if (safeStatus === 'applied') {
+            path.setAttribute('d', 'M4.5 12.75l6 6 9-13.5');
+          } else if (safeStatus === 'skipped') {
+            path.setAttribute('d', 'M3 8.689c0-.864.933-1.405 1.683-.977l7.108 4.062a1.125 1.125 0 010 1.953l-7.108 4.062A1.125 1.125 0 013 16.81V8.69z');
+          } else {
+            path.setAttribute('d', 'M6 18L18 6M6 6l12 12');
+          }
+          svg.appendChild(path);
+          iconDiv.appendChild(svg);
+
+          // Body
+          var bodyDiv = document.createElement('div');
+          bodyDiv.className = 'feed__body';
+
+          var titleDiv = document.createElement('div');
+          titleDiv.className = 'feed__title';
+          titleDiv.textContent = (entry.title || '') + ' @ ' + (entry.company || '');
+
+          var metaDiv = document.createElement('div');
+          metaDiv.className = 'feed__meta';
+          var catSpan = document.createElement('span');
+          catSpan.className = 'feed__cat';
+          catSpan.textContent = entry.category || '';
+          var locSpan = document.createElement('span');
+          locSpan.textContent = entry.location || '';
+          metaDiv.appendChild(catSpan);
+          metaDiv.appendChild(locSpan);
+
+          bodyDiv.appendChild(titleDiv);
+          bodyDiv.appendChild(metaDiv);
+
+          if (entry.reason) {
+            var reasonDiv = document.createElement('div');
+            reasonDiv.className = 'feed__reason';
+            reasonDiv.textContent = entry.reason;
+            bodyDiv.appendChild(reasonDiv);
+          }
+
+          // Time
+          var timeDiv = document.createElement('div');
+          timeDiv.className = 'feed__time';
+          timeDiv.textContent = entry.time || '';
+
+          item.appendChild(iconDiv);
+          item.appendChild(bodyDiv);
+          item.appendChild(timeDiv);
+
+          feedEl.insertBefore(item, feedEl.firstChild);
+
+          // Keep max 50 items
+          while (feedEl.children.length > 50) {
+            feedEl.removeChild(feedEl.lastChild);
+          }
+        } catch (err) { /* ignore parse errors */ }
+      });
+
+      evtSource.onerror = function() {
+        if (statusIndicator) {
+          statusIndicator.className = 'sse-dot sse-dot--disconnected';
+          statusIndicator.title = 'Disconnected - reconnecting...';
+        }
+        evtSource.close();
+        setTimeout(connect, 3000);
+      };
+    }
+
+    connect();
+  })();
+
+})();
+</script>
+{% endblock %}

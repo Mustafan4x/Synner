@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<!-- ===== Header ===== -->
+<header class="header">
+  <div class="header__left">
+    <h1 class="header__title">Settings</h1>
+    <span class="header__subtitle">Configuration &amp; resume mapping</span>
+  </div>
+</header>
+
+<!-- ===== Accent Bar ===== -->
+<div class="accent-bar"></div>
+
+<!-- ===== Toast Container ===== -->
+<div id="toastContainer" class="toast-container"></div>
+
+<form id="settingsForm" method="POST" action="/settings" autocomplete="off">
+  <div class="settings-grid">
+
+    <!-- ===== API Key ===== -->
+    <div class="card settings-section">
+      <div class="card__header">
+        <h2 class="card__title">API Configuration</h2>
+        <div class="settings-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="18" height="18">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="field">
+        <label class="field__label" for="openai_api_key">OpenAI API Key</label>
+        <div class="field__input-wrap">
+          <input type="password" name="openai_api_key" id="openai_api_key"
+                 class="input" value="{{ config.openai_api_key }}"
+                 placeholder="sk-..." autocomplete="off">
+          <button type="button" class="field__toggle" id="toggleApiKey" title="Show/hide API key">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="18" height="18" class="icon-eye">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z"/>
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="18" height="18" class="icon-eye-off" style="display:none;">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.98 8.223A10.477 10.477 0 001.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.45 10.45 0 0112 4.5c4.756 0 8.773 3.162 10.065 7.498a10.523 10.523 0 01-4.293 5.774M6.228 6.228L3 3m3.228 3.228l3.65 3.65m7.894 7.894L21 21m-3.228-3.228l-3.65-3.65m0 0a3 3 0 10-4.243-4.243m4.242 4.242L9.88 9.88"/>
+            </svg>
+          </button>
+        </div>
+        <span class="field__hint">Used for GPT-4o-mini screening question answers</span>
+      </div>
+    </div>
+
+    <!-- ===== Delays ===== -->
+    <div class="card settings-section">
+      <div class="card__header">
+        <h2 class="card__title">Rate Limiting</h2>
+        <div class="settings-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="18" height="18">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label class="field__label" for="delay_min_seconds">App delay min (s)</label>
+          <input type="number" name="delay_min_seconds" id="delay_min_seconds"
+                 class="input" value="{{ config.delay_min_seconds }}" min="5" max="300">
+        </div>
+        <div class="field">
+          <label class="field__label" for="delay_max_seconds">App delay max (s)</label>
+          <input type="number" name="delay_max_seconds" id="delay_max_seconds"
+                 class="input" value="{{ config.delay_max_seconds }}" min="10" max="600">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label class="field__label" for="search_delay_min_seconds">Search delay min (s)</label>
+          <input type="number" name="search_delay_min_seconds" id="search_delay_min_seconds"
+                 class="input" value="{{ config.search_delay_min_seconds }}" min="30" max="600">
+        </div>
+        <div class="field">
+          <label class="field__label" for="search_delay_max_seconds">Search delay max (s)</label>
+          <input type="number" name="search_delay_max_seconds" id="search_delay_max_seconds"
+                 class="input" value="{{ config.search_delay_max_seconds }}" min="60" max="900">
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Limits ===== -->
+    <div class="card settings-section">
+      <div class="card__header">
+        <h2 class="card__title">Session Limits</h2>
+        <div class="settings-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" width="18" height="18">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/>
+          </svg>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label class="field__label" for="max_applications_per_session">Max per session</label>
+          <input type="number" name="max_applications_per_session" id="max_applications_per_session"
+                 class="input" value="{{ config.max_applications_per_session }}" min="1" max="500">
+        </div>
+        <div class="field">
+          <label class="field__label" for="max_per_category">Max per category</label>
+          <input type="number" name="max_per_category" id="max_per_category"
+                 class="input" value="{{ config.max_per_category }}" min="1" max="200">
+        </div>
+      </div>
+      <div class="field" style="margin-top: 16px;">
+        <label class="toggle-field">
+          <input type="checkbox" name="headless" id="headless" {% if config.headless %}checked{% endif %}>
+          <span class="toggle-switch"></span>
+          <span class="toggle-label">Headless mode</span>
+        </label>
+        <span class="field__hint">Run Chrome without a visible browser window</span>
+      </div>
+    </div>
+
+    <!-- ===== Resume Mapping ===== -->
+    <div class="card settings-section">
+      <div class="card__header">
+        <h2 class="card__title">Resume Mapping</h2>
+        <span class="badge badge--info">Read-only</span>
+      </div>
+      <div class="resume-cards">
+        {% for cat, filename in resume_map.items() %}
+        <div class="resume-card">
+          <div class="resume-card__icon">
+            <span class="cat-card__badge cat-card__badge--{{ cat }}">{{ cat }}</span>
+          </div>
+          <div class="resume-card__body">
+            <div class="resume-card__file font-mono">{{ filename }}</div>
+            <div class="resume-card__path">~/Documents/resumes/pdfs/</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== Save Button ===== -->
+  <div class="settings-actions">
+    <button type="submit" class="btn btn--primary" id="saveBtn">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5"/>
+      </svg>
+      Save Configuration
+    </button>
+  </div>
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  'use strict';
+
+  // --- API Key show/hide toggle ---
+  var toggleBtn = document.getElementById('toggleApiKey');
+  var apiInput = document.getElementById('openai_api_key');
+  var eyeIcon = toggleBtn.querySelector('.icon-eye');
+  var eyeOffIcon = toggleBtn.querySelector('.icon-eye-off');
+
+  toggleBtn.addEventListener('click', function() {
+    var isPassword = apiInput.type === 'password';
+    apiInput.type = isPassword ? 'text' : 'password';
+    eyeIcon.style.display = isPassword ? 'none' : '';
+    eyeOffIcon.style.display = isPassword ? '' : 'none';
+  });
+
+  // --- Toast notification ---
+  function showToast(message, type) {
+    var container = document.getElementById('toastContainer');
+    var toast = document.createElement('div');
+    toast.className = 'toast toast--' + type;
+
+    var iconSpan = document.createElement('span');
+    iconSpan.className = 'toast__icon';
+    if (type === 'success') {
+      iconSpan.textContent = '\u2713';
+    } else if (type === 'error') {
+      iconSpan.textContent = '\u2717';
+    } else {
+      iconSpan.textContent = '\u26A0';
+    }
+
+    var msgSpan = document.createElement('span');
+    msgSpan.className = 'toast__msg';
+    msgSpan.textContent = message;
+
+    toast.appendChild(iconSpan);
+    toast.appendChild(msgSpan);
+    container.appendChild(toast);
+
+    requestAnimationFrame(function() { toast.classList.add('toast--visible'); });
+
+    setTimeout(function() {
+      toast.classList.remove('toast--visible');
+      setTimeout(function() { toast.remove(); }, 300);
+    }, 4000);
+  }
+
+  // --- Form submission with validation ---
+  var form = document.getElementById('settingsForm');
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+
+    var apiKey = apiInput.value.trim();
+    var warnings = [];
+
+    if (!apiKey || apiKey === 'sk-...') {
+      warnings.push('API key is empty or placeholder');
+    }
+
+    var delayMin = parseInt(document.getElementById('delay_min_seconds').value);
+    var delayMax = parseInt(document.getElementById('delay_max_seconds').value);
+    if (delayMin >= delayMax) {
+      warnings.push('App delay min must be less than max');
+    }
+
+    var searchMin = parseInt(document.getElementById('search_delay_min_seconds').value);
+    var searchMax = parseInt(document.getElementById('search_delay_max_seconds').value);
+    if (searchMin >= searchMax) {
+      warnings.push('Search delay min must be less than max');
+    }
+
+    var maxSession = parseInt(document.getElementById('max_applications_per_session').value);
+    var maxCat = parseInt(document.getElementById('max_per_category').value);
+    if (maxCat > maxSession) {
+      warnings.push('Max per category should not exceed max per session');
+    }
+
+    if (warnings.length > 0) {
+      warnings.forEach(function(w) { showToast(w, 'warning'); });
+    }
+
+    var formData = new FormData(form);
+    fetch('/settings', {
+      method: 'POST',
+      body: formData,
+    })
+    .then(function(resp) { return resp.json(); })
+    .then(function(data) {
+      if (data.success) {
+        showToast('Configuration saved successfully', 'success');
+      } else {
+        showToast(data.error || 'Failed to save configuration', 'error');
+      }
+    })
+    .catch(function() {
+      showToast('Network error - could not save', 'error');
+    });
+  });
+
+  {% if flash_msg %}
+  showToast('{{ flash_msg }}', '{{ flash_type }}');
+  {% endif %}
+
+})();
+</script>
+{% endblock %}
