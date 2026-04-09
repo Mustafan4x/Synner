@@ -14,7 +14,7 @@ from typing import Any
 from applier.config import load_config, load_resume
 from applier.linkedin import create_driver, run_category
 from applier.llm import create_client
-from applier.logger import print_summary
+from applier.logger import print_summary, setup_logger
 
 # ── Categories ──────────────────────────────────────────────────────────────
 
@@ -28,8 +28,12 @@ _shutdown_requested: bool = False
 def _handle_sigint(sig: int, frame: FrameType | None) -> None:
     """Set shutdown flag on Ctrl+C so the main loop can exit cleanly."""
     global _shutdown_requested
+    if _shutdown_requested:
+        # Second Ctrl+C — force exit
+        print("\n[!] Force quit.")
+        sys.exit(1)
     _shutdown_requested = True
-    print("\n[!] Shutdown requested — finishing current application then exiting…")
+    print("\n[!] Shutdown requested — finishing current application then exiting… (Ctrl+C again to force quit)")
 
 
 # ── Argument parsing ───────────────────────────────────────────────────────
@@ -88,6 +92,9 @@ def main(argv: list[str] | None = None) -> None:
     global _shutdown_requested
 
     args = parse_args(argv)
+
+    # Initialize logging so all applier.* loggers output to console
+    setup_logger()
 
     # Load configuration and resume data
     config: dict[str, Any] = load_config()
@@ -158,18 +165,27 @@ def main(argv: list[str] | None = None) -> None:
             except KeyboardInterrupt:
                 _shutdown_requested = True
                 print(f"\n[!] Interrupted during category {category}.")
+            except Exception as exc:
+                if _shutdown_requested:
+                    break  # Chrome likely closed during shutdown
+                print(f"\n[!] Error in category {category}: {exc}")
+                break
 
             session_stats[category] = stats
             total_applied += stats.get("applied", 0)
 
             # Pause between categories (unless shutting down or last category)
-            if not _shutdown_requested and category != categories[-1]:
-                _sleep_between_searches(config)
+            # TODO: Re-enable delays for production use
+            # if not _shutdown_requested and category != categories[-1]:
+            #     _sleep_between_searches(config)
     finally:
         # ── End-of-session summary ──────────────────────────────────────
         print()
         print_summary(session_stats)
-        driver.quit()
+        try:
+            driver.quit()
+        except Exception:
+            pass  # Chrome may already be closed (e.g. after Ctrl+C)
 
 
 if __name__ == "__main__":

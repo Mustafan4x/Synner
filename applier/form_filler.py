@@ -233,8 +233,8 @@ class FormFiller:
         """
         name = element.get_attribute("name")
         if not name:
-            # Fall back to clicking the element itself
-            element.click()
+            # Fall back to clicking the element itself via JS
+            driver.execute_script("arguments[0].click();", element)
             return
 
         radio_buttons = driver.find_elements(By.CSS_SELECTOR, f'input[type="radio"][name="{name}"]')
@@ -268,11 +268,12 @@ class FormFiller:
                 break
 
         if best_match is not None:
-            best_match.click()
+            # Use JS click to bypass styled overlays (download buttons, etc.)
+            driver.execute_script("arguments[0].click();", best_match)
         else:
             # Fallback: click the first radio button
             if radio_buttons:
-                radio_buttons[0].click()
+                driver.execute_script("arguments[0].click();", radio_buttons[0])
                 logger.warning(
                     "Radio fallback: clicked first option (wanted '%s')", answer
                 )
@@ -291,14 +292,19 @@ class FormFiller:
             answer: The desired answer text (may contain multiple values
                     separated by commas).
         """
-        name = element.get_attribute("name")
+        name = element.get_attribute("name") or ""
         answer_lower = answer.lower().strip()
+
+        # Skip LinkedIn's "top choice" checkbox — it's not a screening question
+        if "topchoice" in name.lower().replace(" ", "").replace("-", "").replace("_", ""):
+            logger.debug("Skipping 'top choice' checkbox")
+            return
 
         # Single checkbox case (e.g., agreement checkbox)
         if not name:
             if answer_lower in ("yes", "true", "i agree", "agree"):
                 if not element.is_selected():
-                    element.click()
+                    driver.execute_script("arguments[0].click();", element)
             return
 
         checkboxes = driver.find_elements(By.CSS_SELECTOR, f'input[type="checkbox"][name="{name}"]')
@@ -307,7 +313,7 @@ class FormFiller:
         if len(checkboxes) == 1:
             if answer_lower in ("yes", "true", "i agree", "agree"):
                 if not element.is_selected():
-                    element.click()
+                    driver.execute_script("arguments[0].click();", element)
             return
 
         # Multiple checkboxes — match answer parts against labels
@@ -335,5 +341,5 @@ class FormFiller:
                 for part in answer_parts:
                     if part in label_lower or label_lower in part:
                         if not checkbox.is_selected():
-                            checkbox.click()
+                            driver.execute_script("arguments[0].click();", checkbox)
                         break

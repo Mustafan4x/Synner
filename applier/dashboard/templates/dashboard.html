@@ -6,11 +6,11 @@
 <header class="header">
   <div class="header__left">
     <h1 class="header__title">Dashboard</h1>
-    <div class="status-badge status-badge--{{ data.status }}">
+    <div class="status-badge status-badge--{{ data.status }}" data-session-badge>
       <span class="status-dot"></span>
-      {{ data.status | capitalize }}
+      <span data-session-status-text>{{ data.status | capitalize }}</span>
     </div>
-    <span class="elapsed">{{ data.session_elapsed }}</span>
+    <span class="elapsed" data-session-timer style="display: none;">00:00:00</span>
     <span id="sseStatus" class="sse-dot sse-dot--disconnected" title="Connecting..."></span>
   </div>
   <div class="header__right">
@@ -227,6 +227,19 @@
     </div>
   </div>
 
+</div>
+
+<!-- ===== Terminal Log Panel ===== -->
+<div class="card terminal-card" style="margin-top: 20px;">
+  <div class="card__header">
+    <h2 class="card__title">Terminal Output</h2>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span id="terminalStatus" class="sse-dot sse-dot--disconnected" title="Connecting..."></span>
+      <button class="sort-btn" id="terminalClear" title="Clear terminal">Clear</button>
+      <button class="sort-btn" id="terminalToggle" title="Toggle auto-scroll">Auto-scroll: ON</button>
+    </div>
+  </div>
+  <div class="terminal" id="terminalOutput"><span class="terminal__placeholder">Waiting for session output...</span></div>
 </div>
 
 {% endblock %}
@@ -453,6 +466,100 @@
     }
 
     connect();
+  })();
+
+  // --- Terminal Log SSE ---
+  (function initTerminalSSE() {
+    var termEl = document.getElementById('terminalOutput');
+    var termStatus = document.getElementById('terminalStatus');
+    var clearBtn = document.getElementById('terminalClear');
+    var toggleBtn = document.getElementById('terminalToggle');
+    var autoScroll = true;
+    var hasContent = false;
+    var logSource = null;
+
+    toggleBtn.addEventListener('click', function() {
+      autoScroll = !autoScroll;
+      toggleBtn.textContent = 'Auto-scroll: ' + (autoScroll ? 'ON' : 'OFF');
+    });
+
+    clearBtn.addEventListener('click', function() {
+      termEl.textContent = '';
+      hasContent = false;
+    });
+
+    function appendText(text) {
+      if (!hasContent) {
+        termEl.textContent = '';
+        hasContent = true;
+      }
+      // Create a text node to safely append
+      var lines = text.split('\n');
+      for (var i = 0; i < lines.length; i++) {
+        var line = lines[i];
+        var span = document.createElement('span');
+
+        // Color-code based on content
+        if (line.indexOf('APPLIED') !== -1) {
+          span.className = 'terminal__line terminal__line--applied';
+        } else if (line.indexOf('SKIPPED') !== -1) {
+          span.className = 'terminal__line terminal__line--skipped';
+        } else if (line.indexOf('FAILED') !== -1 || line.indexOf('Error') !== -1 || line.indexOf('WARNING') !== -1) {
+          span.className = 'terminal__line terminal__line--failed';
+        } else if (line.indexOf('Starting category') !== -1 || line.indexOf('Synner') !== -1 || line.indexOf('Session complete') !== -1) {
+          span.className = 'terminal__line terminal__line--info';
+        } else {
+          span.className = 'terminal__line';
+        }
+
+        span.textContent = line;
+        termEl.appendChild(span);
+        if (i < lines.length - 1) {
+          termEl.appendChild(document.createTextNode('\n'));
+        }
+      }
+
+      // Keep terminal from growing unbounded
+      var maxLines = 500;
+      while (termEl.childNodes.length > maxLines * 2) {
+        termEl.removeChild(termEl.firstChild);
+      }
+
+      if (autoScroll) {
+        termEl.scrollTop = termEl.scrollHeight;
+      }
+    }
+
+    function connectLogs() {
+      logSource = new EventSource('/api/logs');
+
+      logSource.onopen = function() {
+        if (termStatus) {
+          termStatus.className = 'sse-dot sse-dot--connected';
+          termStatus.title = 'Log stream connected';
+        }
+      };
+
+      logSource.addEventListener('log', function(e) {
+        try {
+          var data = JSON.parse(e.data);
+          if (data.text) {
+            appendText(data.text);
+          }
+        } catch (err) { /* ignore */ }
+      });
+
+      logSource.onerror = function() {
+        if (termStatus) {
+          termStatus.className = 'sse-dot sse-dot--disconnected';
+          termStatus.title = 'Disconnected - reconnecting...';
+        }
+        logSource.close();
+        setTimeout(connectLogs, 3000);
+      };
+    }
+
+    connectLogs();
   })();
 
 })();

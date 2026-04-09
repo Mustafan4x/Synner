@@ -163,29 +163,65 @@ def _check_hardcoded(question: str, options: list[str] | None, resume: dict, cat
     """
     q = question.lower().strip()
 
-    # Authorized to work
-    if "authorized to work" in q:
+    # Authorized to work — many phrasings
+    if any(p in q for p in (
+        "authorized to work", "authorised to work",
+        "legally authorized", "legally authorised",
+        "work authorization", "work authorisation",
+        "eligible to work", "right to work",
+        "legally eligible", "permitted to work",
+    )):
         return _pick_option("Yes", options)
 
     # Sponsorship
-    if "require sponsorship" in q or "visa sponsorship" in q or "need sponsorship" in q:
+    if any(p in q for p in (
+        "require sponsorship", "visa sponsorship", "need sponsorship",
+        "sponsorship", "require visa", "immigration sponsorship",
+    )):
         return _pick_option("No", options)
 
-    # Years of experience with a specific technology
-    yoe_match = re.search(r"years?\s+of\s+experience\s+(?:with|in|using)\s+(.+?)[\?\.]?\s*$", q)
-    if yoe_match:
-        tech_name = yoe_match.group(1).strip().rstrip("?.")
-        yoe = resume.get("years_of_experience", {})
-        # Try exact match first, then case-insensitive
-        years = yoe.get(tech_name)
-        if years is None:
-            for key, val in yoe.items():
-                if key.lower() == tech_name.lower():
-                    years = val
-                    break
-        if years is None:
-            years = 0
-        return _pick_option(str(years), options)
+    # Certifications / licenses — if asked "do you have" a specific cert,
+    # answer No unless it's something on the resume
+    if any(p in q for p in ("license or certification", "certification", "certified")):
+        # Check if any resume skill matches
+        all_skills = []
+        for skill_list in resume.get("skills", {}).values():
+            if isinstance(skill_list, list):
+                all_skills.extend(s.lower() for s in skill_list)
+        # If the cert is mentioned in skills, say Yes
+        for skill in all_skills:
+            if skill in q:
+                return _pick_option("Yes", options)
+        return _pick_option("No", options)
+
+    # Years of experience — multiple phrasings:
+    # "years of experience with Python", "years of analyst experience",
+    # "how many years of data engineering experience", etc.
+    yoe_patterns = [
+        r"(?:how many\s+)?years?\s+of\s+(?:professional\s+|work\s+)?experience\s+(?:with|in|using)\s+(.+?)[\?\.]?\s*$",
+        r"(?:how many\s+)?years?\s+of\s+(.+?)\s+experience[\?\.]?\s*$",
+        r"experience\s+(?:with|in|using)\s+(.+?)[\?\.\,]",
+    ]
+    for pattern in yoe_patterns:
+        yoe_match = re.search(pattern, q)
+        if yoe_match:
+            tech_name = yoe_match.group(1).strip().rstrip("?.,:;")
+            yoe = resume.get("years_of_experience", {})
+            # Try exact match first, then case-insensitive, then substring
+            years = yoe.get(tech_name)
+            if years is None:
+                for key, val in yoe.items():
+                    if key.lower() == tech_name.lower():
+                        years = val
+                        break
+            if years is None:
+                for key, val in yoe.items():
+                    if key.lower() in tech_name.lower() or tech_name.lower() in key.lower():
+                        years = val
+                        break
+            if years is None:
+                years = 0
+            return _pick_option(str(years), options)
 
     # Willing to relocate
     if "willing to relocate" in q or "open to relocation" in q:
@@ -206,6 +242,18 @@ def _check_hardcoded(question: str, options: list[str] | None, resume: dict, cat
     # Education level
     if "education level" in q or "highest degree" in q or "highest level of education" in q:
         return _pick_option("Bachelor's (in progress)", options)
+
+    # Specific degree questions — "do you have a master's", "do you have a PhD", etc.
+    if any(p in q for p in ("master's", "masters", "master degree", "mba")):
+        if "do you have" in q or "have you" in q or "completed" in q:
+            return _pick_option("No", options)
+    if any(p in q for p in ("phd", "ph.d", "doctorate", "doctoral")):
+        if "do you have" in q or "have you" in q or "completed" in q:
+            return _pick_option("No", options)
+    if any(p in q for p in ("bachelor", "bachelor's", "bachelors", "bs ", "b.s.")):
+        if "do you have" in q or "have you" in q or "completed" in q:
+            # In progress, not completed
+            return _pick_option("Yes", options)
 
     # GPA
     if "gpa" in q:
@@ -300,10 +348,18 @@ def answer_question(
     # Build system prompt with resume context
     resume_text = _format_resume(resume)
     system_prompt = (
-        "You are an AI assistant helping a job applicant answer screening questions.\n"
-        "Answer concisely and professionally based on the applicant's resume below.\n"
-        "Keep answers to 1-3 sentences unless more detail is specifically needed.\n"
-        "If the question is yes/no, answer with just 'Yes' or 'No'.\n\n"
+        "You are an AI assistant filling out a job application form on behalf of an applicant.\n"
+        "You MUST answer every question from the applicant's perspective as if you ARE the applicant.\n"
+        "Never say 'I don't have experience' or 'I cannot answer'. Always provide a concrete answer.\n\n"
+        "CRITICAL RULES:\n"
+        "- If asked 'how many years of experience' with something not on the resume, answer '0'\n"
+        "- If a field expects a NUMBER, respond with ONLY a number (e.g., '0', '2', '5'). No words.\n"
+        "- If yes/no, answer with just 'Yes' or 'No'\n"
+        "- If asked for a city or location, answer 'Arlington, TX'\n"
+        "- Keep free-text answers to 1-2 sentences, professional and confident\n"
+        "- Always be positive about the applicant's qualifications\n"
+        "- For work authorization: Yes. For sponsorship: No.\n"
+        "- When in doubt, give the answer most likely to get the applicant hired\n\n"
         f"APPLICANT RESUME:\n{resume_text}"
     )
 
@@ -313,6 +369,11 @@ def answer_question(
         user_prompt += (
             f"\n\nThis is a multiple-choice question. Choose the BEST option from:\n{options_text}\n"
             "Respond with the exact text of the chosen option, nothing else."
+        )
+    else:
+        user_prompt += (
+            "\n\nRespond with ONLY the answer value. No explanation, no extra words. "
+            "If the field expects a number, respond with just the number."
         )
 
     answer = _call_llm(system_prompt, user_prompt).strip()

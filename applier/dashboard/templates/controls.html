@@ -6,11 +6,11 @@
 <header class="header">
   <div class="header__left">
     <h1 class="header__title">Run Controls</h1>
-    <div id="sessionBadge" class="status-badge status-badge--idle">
+    <div id="sessionBadge" class="status-badge status-badge--idle" data-session-badge>
       <span class="status-dot"></span>
-      <span id="sessionStatusText">Idle</span>
+      <span id="sessionStatusText" data-session-status-text>Idle</span>
     </div>
-    <span class="elapsed" id="elapsedTime" style="display: none;">00:00:00</span>
+    <span class="elapsed" id="elapsedTime" data-session-timer style="display: none;">00:00:00</span>
   </div>
 </header>
 
@@ -189,8 +189,6 @@
   'use strict';
 
   var isRunning = false;
-  var startTime = null;
-  var timerInterval = null;
 
   var startBtn = document.getElementById('startBtn');
   var stopBtn = document.getElementById('stopBtn');
@@ -279,30 +277,8 @@
     }, 4000);
   }
 
-  // --- Timer ---
-  function formatElapsed(ms) {
-    var secs = Math.floor(ms / 1000);
-    var h = String(Math.floor(secs / 3600)).padStart(2, '0');
-    var m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
-    var s = String(secs % 60).padStart(2, '0');
-    return h + ':' + m + ':' + s;
-  }
-
-  function startTimer() {
-    startTime = Date.now();
-    elapsedEl.style.display = '';
-    timerInterval = setInterval(function() {
-      var elapsed = formatElapsed(Date.now() - startTime);
-      elapsedEl.textContent = elapsed;
-      progressElapsed.textContent = elapsed;
-    }, 1000);
-  }
-
-  function stopTimer() {
-    clearInterval(timerInterval);
-    timerInterval = null;
-    elapsedEl.style.display = 'none';
-  }
+  // --- Timer uses shared SynnerTimer from base.html ---
+  var _progressInterval = null;
 
   function setRunningState(running) {
     isRunning = running;
@@ -313,11 +289,18 @@
     if (running) {
       sessionBadge.className = 'status-badge status-badge--running';
       sessionStatusText.textContent = 'Running';
-      startTimer();
+      elapsedEl.style.display = '';
+      // Sync progressElapsed with the shared timer
+      _progressInterval = setInterval(function() {
+        if (progressElapsed && elapsedEl) {
+          progressElapsed.textContent = elapsedEl.textContent;
+        }
+      }, 1000);
     } else {
       sessionBadge.className = 'status-badge status-badge--idle';
       sessionStatusText.textContent = 'Idle';
-      stopTimer();
+      if (window.SynnerTimer) window.SynnerTimer.stop();
+      if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
     }
   }
 
@@ -351,6 +334,9 @@
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.success) {
+        // Start the shared timer using the server's epoch
+        var startMs = data.start_time ? data.start_time * 1000 : Date.now();
+        if (window.SynnerTimer) window.SynnerTimer.start(startMs);
         setRunningState(true);
         showToast('Session started', 'success');
       } else {

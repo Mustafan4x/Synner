@@ -33,6 +33,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _CSV_PATH = _PROJECT_ROOT / "applications.csv"
 _CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 _RUN_SCRIPT = _PROJECT_ROOT / "run.py"
+_LOG_PATH = _PROJECT_ROOT / ".session_log"
 
 # ---------------------------------------------------------------------------
 # Subprocess management
@@ -40,6 +41,8 @@ _RUN_SCRIPT = _PROJECT_ROOT / "run.py"
 
 _process_lock = threading.Lock()
 _current_process: subprocess.Popen | None = None
+_session_start_time: float | None = None
+_log_file_handle = None
 
 
 def _is_process_running() -> bool:
@@ -282,6 +285,85 @@ def _build_mock_data() -> dict:
     }
 
 
+def _build_real_data() -> dict:
+    """Build dashboard data from the real applications.csv file."""
+    rows = _read_csv()
+
+    cat_stats: dict[str, dict[str, int]] = {}
+    for cat in ("SWE", "FS", "MLAI", "DE"):
+        cat_stats[cat] = {"applied": 0, "skipped": 0, "failed": 0, "limit": 30}
+
+    total_applied = 0
+    total_skipped = 0
+    total_failed = 0
+
+    for row in rows:
+        status = (row.get("status") or "").upper()
+        cat = row.get("category", "")
+        if cat in cat_stats:
+            if status == "APPLIED":
+                cat_stats[cat]["applied"] += 1
+                total_applied += 1
+            elif status == "SKIPPED":
+                cat_stats[cat]["skipped"] += 1
+                total_skipped += 1
+            else:
+                cat_stats[cat]["failed"] += 1
+                total_failed += 1
+
+    total = total_applied + total_skipped + total_failed
+
+    session = {
+        "applied": total_applied,
+        "skipped": total_skipped,
+        "failed": total_failed,
+        "total": total,
+    }
+
+    success_rate = round(total_applied / total * 100) if total > 0 else 0
+
+    # Build feed from last 50 rows (most recent first)
+    feed = []
+    for row in reversed(rows[-50:]):
+        time_str = ""
+        date_str = row.get("date", "")
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            time_str = dt.strftime("%I:%M %p")
+        except ValueError:
+            time_str = date_str
+
+        feed.append({
+            "time": time_str,
+            "timestamp": date_str,
+            "category": row.get("category", ""),
+            "company": row.get("company", ""),
+            "title": row.get("title", ""),
+            "location": row.get("location", ""),
+            "status": (row.get("status") or "").lower(),
+            "reason": row.get("reason", ""),
+        })
+
+    # Radar values
+    radar = {}
+    for cat, vals in cat_stats.items():
+        limit = vals["limit"]
+        radar[cat] = round(vals["applied"] / limit, 2) if limit > 0 else 0
+
+    return {
+        "session": session,
+        "alltime": session,  # same as session until multi-session tracking is added
+        "trends": {"applied": 0, "skipped": 0, "failed": 0},
+        "categories": cat_stats,
+        "feed": feed,
+        "success_rate": success_rate,
+        "radar": radar,
+        "status": "running" if _is_process_running() else "idle",
+        "session_elapsed": "00:00:00",
+        "user": "Mustafa Nazeer",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Flask app factory
 # ---------------------------------------------------------------------------
@@ -300,23 +382,23 @@ def create_app() -> Flask:
 
     @app.route("/")
     def dashboard() -> str:
-        """Serve the main dashboard page with mock data."""
+        """Serve the main dashboard page with real CSV data."""
         return render_template(
             "dashboard.html",
-            data=_build_mock_data(),
+            data=_build_real_data(),
             active_page="dashboard",
         )
 
     @app.route("/api/feed")
     def api_feed() -> tuple:
         """Return the live feed entries as JSON."""
-        data = _build_mock_data()
+        data = _build_real_data()
         return jsonify(data["feed"])
 
     @app.route("/api/stats")
     def api_stats() -> tuple:
         """Return current stats as JSON."""
-        data = _build_mock_data()
+        data = _build_real_data()
         return jsonify({
             "session": data["session"],
             "alltime": data["alltime"],
@@ -399,7 +481,7 @@ def create_app() -> Flask:
     @app.route("/api/start", methods=["POST"])
     def api_start():
         """Start run.py as a subprocess."""
-        global _current_process
+        global _current_process, _session_start_time, _log_file_handle
         with _process_lock:
             if _current_process is not None and _current_process.poll() is None:
                 return jsonify({"success": False, "error": "Session already running"})
@@ -409,7 +491,7 @@ def create_app() -> Flask:
             dry_run = body.get("dry_run", False)
             headless = body.get("headless", False)
 
-            cmd = [sys.executable, str(_RUN_SCRIPT)]
+            cmd = [sys.executable, "-u", str(_RUN_SCRIPT)]
             if len(categories) == 1:
                 cmd.extend(["--category", categories[0]])
             if dry_run:
@@ -418,23 +500,37 @@ def create_app() -> Flask:
                 cmd.append("--headless")
 
             try:
+                # Close previous log handle if any
+                if _log_file_handle and not _log_file_handle.closed:
+                    _log_file_handle.close()
+
+                # Clear previous log
+                if _LOG_PATH.exists():
+                    _LOG_PATH.unlink()
+
+                _log_file_handle = open(_LOG_PATH, "w", encoding="utf-8", buffering=1)
                 _current_process = subprocess.Popen(
                     cmd,
                     cwd=str(_PROJECT_ROOT),
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    stdout=_log_file_handle,
+                    stderr=subprocess.STDOUT,
                 )
-                return jsonify({"success": True, "pid": _current_process.pid})
+                _session_start_time = time.time()
+                return jsonify({"success": True, "pid": _current_process.pid, "start_time": _session_start_time})
             except Exception as exc:
                 return jsonify({"success": False, "error": str(exc)})
 
     @app.route("/api/stop", methods=["POST"])
     def api_stop():
         """Stop the running subprocess."""
-        global _current_process
+        global _current_process, _session_start_time, _log_file_handle
         with _process_lock:
             if _current_process is None or _current_process.poll() is not None:
                 _current_process = None
+                _session_start_time = None
+                if _log_file_handle and not _log_file_handle.closed:
+                    _log_file_handle.close()
+                    _log_file_handle = None
                 return jsonify({"success": True, "message": "No session running"})
 
             try:
@@ -445,15 +541,81 @@ def create_app() -> Flask:
                     _current_process.kill()
                     _current_process.wait(timeout=5)
                 _current_process = None
+                _session_start_time = None
+                if _log_file_handle and not _log_file_handle.closed:
+                    _log_file_handle.close()
+                    _log_file_handle = None
                 return jsonify({"success": True})
             except Exception as exc:
                 return jsonify({"success": False, "error": str(exc)})
 
     @app.route("/api/status")
     def api_status():
-        """Return current process status."""
+        """Return current process status and session start time."""
         running = _is_process_running()
-        return jsonify({"running": running})
+        return jsonify({
+            "running": running,
+            "start_time": _session_start_time if running else None,
+        })
+
+    # ── Terminal Log Stream ─────────────────────────────────────────────
+
+    @app.route("/api/logs")
+    def api_logs():
+        """Server-Sent Events endpoint that tails the session log file."""
+
+        def generate_logs() -> Generator[str, None, None]:
+            yield "event: connected\ndata: {}\n\n"
+
+            # Use binary mode to avoid byte/character offset mismatch
+            last_pos = 0
+            if _LOG_PATH.exists():
+                try:
+                    with open(_LOG_PATH, "rb") as fh:
+                        content = fh.read().decode("utf-8", errors="replace")
+                    if content:
+                        yield "event: log\ndata: " + json.dumps({"text": content}) + "\n\n"
+                    last_pos = _LOG_PATH.stat().st_size
+                except Exception:
+                    pass
+
+            while True:
+                time.sleep(0.5)
+
+                if not _LOG_PATH.exists():
+                    yield ": keepalive\n\n"
+                    continue
+
+                try:
+                    current_size = _LOG_PATH.stat().st_size
+                except OSError:
+                    yield ": keepalive\n\n"
+                    continue
+
+                if current_size <= last_pos:
+                    yield ": keepalive\n\n"
+                    continue
+
+                try:
+                    with open(_LOG_PATH, "rb") as fh:
+                        fh.seek(last_pos)
+                        new_data = fh.read().decode("utf-8", errors="replace")
+                    last_pos = current_size
+
+                    if new_data.strip():
+                        yield "event: log\ndata: " + json.dumps({"text": new_data}) + "\n\n"
+                except Exception:
+                    pass
+
+        return Response(
+            generate_logs(),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
 
     # ── SSE Stream ────────────────────────────────────────────────────────
 

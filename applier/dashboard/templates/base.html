@@ -60,6 +60,89 @@
     </main>
   </div>
 
+  <!-- Shared session timer that persists across page navigation -->
+  <script>
+  (function() {
+    'use strict';
+
+    // --- Shared session timer using localStorage ---
+    var TIMER_KEY = 'synner_session_start';
+
+    function formatElapsed(ms) {
+      var secs = Math.floor(ms / 1000);
+      var h = String(Math.floor(secs / 3600)).padStart(2, '0');
+      var m = String(Math.floor((secs % 3600) / 60)).padStart(2, '0');
+      var s = String(secs % 60).padStart(2, '0');
+      return h + ':' + m + ':' + s;
+    }
+
+    function updateAllTimerElements() {
+      var startStr = localStorage.getItem(TIMER_KEY);
+      var elapsedEls = document.querySelectorAll('[data-session-timer]');
+      if (!startStr || !elapsedEls.length) return;
+
+      var startTime = parseFloat(startStr);
+      var elapsed = formatElapsed(Date.now() - startTime);
+      elapsedEls.forEach(function(el) { el.textContent = elapsed; });
+    }
+
+    // Poll server for session status on every page load
+    fetch('/api/status')
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.running && data.start_time) {
+          // Server has a running session — store its start time
+          // Convert server epoch (seconds) to JS epoch (milliseconds)
+          var serverStart = data.start_time * 1000;
+          var stored = localStorage.getItem(TIMER_KEY);
+          if (!stored) {
+            localStorage.setItem(TIMER_KEY, String(serverStart));
+          }
+          // Start ticking
+          updateAllTimerElements();
+          setInterval(updateAllTimerElements, 1000);
+
+          // Update status badges on page
+          var badges = document.querySelectorAll('[data-session-badge]');
+          badges.forEach(function(b) {
+            b.className = 'status-badge status-badge--running';
+            var dot = b.querySelector('.status-dot');
+            var text = b.querySelector('[data-session-status-text]');
+            if (text) text.textContent = 'Running';
+          });
+          // Show timer elements
+          document.querySelectorAll('[data-session-timer]').forEach(function(el) {
+            el.style.display = '';
+          });
+        } else {
+          // Not running — clear stored timer
+          localStorage.removeItem(TIMER_KEY);
+          document.querySelectorAll('[data-session-timer]').forEach(function(el) {
+            el.style.display = 'none';
+          });
+        }
+      })
+      .catch(function() {});
+
+    // Expose helpers for controls page
+    window.SynnerTimer = {
+      start: function(serverEpochMs) {
+        localStorage.setItem(TIMER_KEY, String(serverEpochMs));
+        updateAllTimerElements();
+        setInterval(updateAllTimerElements, 1000);
+      },
+      stop: function() {
+        localStorage.removeItem(TIMER_KEY);
+        document.querySelectorAll('[data-session-timer]').forEach(function(el) {
+          el.textContent = '00:00:00';
+          el.style.display = 'none';
+        });
+      },
+      formatElapsed: formatElapsed,
+    };
+  })();
+  </script>
+
   {% block scripts %}{% endblock %}
 </body>
 </html>

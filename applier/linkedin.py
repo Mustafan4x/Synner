@@ -5,11 +5,13 @@ from __future__ import annotations
 import logging
 import random
 import time
+from pathlib import Path
 from urllib.parse import quote_plus
 
 import undetected_chromedriver as uc
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
+    ElementNotInteractableException,
     NoSuchElementException,
     StaleElementReferenceException,
     TimeoutException,
@@ -41,10 +43,13 @@ _RESULTS_PER_PAGE = 25
 
 # Selectors — multiple fallbacks to handle LinkedIn DOM changes
 _JOB_CARD_SELECTORS = [
-    "div.job-card-container",
+    "li.scaffold-layout__list-item",
     "li.jobs-search-results__list-item",
+    "div.job-card-container",
+    "li.ember-view.occludable-update",
     "div.jobs-search-results__list-item",
     "div[data-job-id]",
+    "li[data-occludable-job-id]",
 ]
 
 _JOB_TITLE_SELECTORS = [
@@ -53,6 +58,9 @@ _JOB_TITLE_SELECTORS = [
     "a.job-card-list__title--link",
     "a[class*='job-card'] span",
     ".job-card-list__title",
+    "a[href*='/jobs/view/'] strong",
+    "a[href*='/jobs/view/'] span",
+    "a[href*='/jobs/view/']",
 ]
 
 _JOB_COMPANY_SELECTORS = [
@@ -60,12 +68,16 @@ _JOB_COMPANY_SELECTORS = [
     "a.job-card-container__company-name",
     ".job-card-container__company-name",
     "span.artdeco-entity-lockup__subtitle",
+    ".artdeco-entity-lockup__subtitle span",
+    "div.artdeco-entity-lockup__subtitle",
 ]
 
 _JOB_LOCATION_SELECTORS = [
     "li.job-card-container__metadata-item",
     "span.job-card-container__metadata-item",
     ".artdeco-entity-lockup__caption",
+    ".artdeco-entity-lockup__caption span",
+    "div.artdeco-entity-lockup__caption",
 ]
 
 _EASY_APPLY_BUTTON_SELECTORS = [
@@ -74,6 +86,14 @@ _EASY_APPLY_BUTTON_SELECTORS = [
     "button.jobs-apply-button--top-card",
     "div.jobs-apply-button--top-card button",
     "button[class*='jobs-apply-button']",
+    # Newer LinkedIn DOM patterns (2025-2026)
+    "div.jobs-unified-top-card button[class*='apply']",
+    "div[class*='top-card'] button[class*='apply']",
+    "div.job-details-jobs-unified-top-card__container--two-pane button",
+    "button.jobs-apply-button.artdeco-button--primary",
+    "div[class*='jobs-unified-top-card'] button.artdeco-button--primary",
+    "div[class*='job-details'] button[aria-label*='Apply']",
+    "button[aria-label*='apply' i]",
 ]
 
 _NEXT_BUTTON_SELECTORS = [
@@ -119,6 +139,46 @@ _DESCRIPTION_SELECTORS = [
 # ---------------------------------------------------------------------------
 
 
+def _clean_profile_crash_flag(profile_dir: str) -> None:
+    """Clear Chrome's 'exited_cleanly' flag and stale lock files."""
+    profile = Path(profile_dir)
+
+    # Remove stale lock files left by crashed Chrome processes
+    for lock_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        lock_path = profile / lock_file
+        if lock_path.exists():
+            try:
+                lock_path.unlink()
+                log.debug("Removed stale lock: %s", lock_file)
+            except OSError:
+                pass
+
+    # Fix the exited_cleanly flag in Preferences.
+    # Only attempt if the file is reasonably sized (< 50 MB).
+    # Corrupted/bloated profiles should be deleted and recreated.
+    prefs_path = profile / "Default" / "Preferences"
+    if not prefs_path.exists():
+        return
+    try:
+        size = prefs_path.stat().st_size
+        if size > 50_000_000:  # > 50 MB = corrupted
+            log.warning("Preferences file is %.0f MB — deleting corrupted profile", size / 1_000_000)
+            import shutil
+            default_dir = profile / "Default"
+            shutil.rmtree(default_dir, ignore_errors=True)
+            return
+
+        import json as _json
+        data = _json.loads(prefs_path.read_text(encoding="utf-8"))
+        if "profile" in data:
+            data["profile"]["exit_type"] = "Normal"
+            data["profile"]["exited_cleanly"] = True
+        prefs_path.write_text(_json.dumps(data), encoding="utf-8")
+        log.debug("Cleaned Chrome profile crash flag")
+    except Exception:
+        pass
+
+
 def create_driver(cfg: dict) -> uc.Chrome:
     """Launch undetected-chromedriver with a persistent Chrome profile.
 
@@ -132,6 +192,9 @@ def create_driver(cfg: dict) -> uc.Chrome:
     options = uc.ChromeOptions()
 
     profile_dir = cfg.get("linkedin_profile_dir", "./chrome_profile")
+
+    # Clean crash flag before launching to prevent restore dialogs
+    _clean_profile_crash_flag(profile_dir)
     options.add_argument(f"--user-data-dir={profile_dir}")
 
     if cfg.get("headless", False):
@@ -142,9 +205,21 @@ def create_driver(cfg: dict) -> uc.Chrome:
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
 
+    # Suppress crash recovery dialogs and restore prompts that appear
+    # after unclean shutdowns (e.g. Ctrl+C during testing)
+    options.add_argument("--disable-session-crashed-bubble")
+    options.add_argument("--disable-infobars")
+    options.add_argument("--disable-popup-blocking")
+    options.add_argument("--hide-crash-restore-bubble")
+    options.add_argument("--noerrdialogs")
+    options.add_argument("--disable-features=InfiniteSessionRestore")
+
     driver = uc.Chrome(options=options)
-    driver.set_window_size(1920, 1080)
-    driver.implicitly_wait(10)
+    driver.maximize_window()
+    # Keep implicit wait short — we use explicit WebDriverWait where
+    # longer timeouts are needed.  A long implicit wait causes massive
+    # delays in helper functions that try multiple selectors.
+    driver.implicitly_wait(0)
 
     log.info("Browser started with profile: %s", profile_dir)
     return driver
@@ -271,58 +346,133 @@ def search_jobs(driver: uc.Chrome, keyword: str, location: str) -> list[dict]:
         log.info("Searching: %s | %s (offset %d)", keyword, location, start)
         driver.get(url)
 
+        # Wait for actual job links to appear in the DOM. This is the most
+        # reliable signal that results have loaded, regardless of what
+        # container class names LinkedIn uses.
         try:
             WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "div.jobs-search-results-list"))
+                lambda d: d.execute_script(
+                    "return document.querySelectorAll('a[href*=\"/jobs/view/\"]').length > 0"
+                )
             )
         except TimeoutException:
             # Check for "No matching jobs found"
-            try:
-                driver.find_element(By.CSS_SELECTOR, "div.jobs-search-no-results-banner")
+            page_text = (driver.page_source or "").lower()
+            if "no matching jobs" in page_text or "no results" in page_text:
                 log.info("No results for '%s' in '%s'", keyword, location)
                 return jobs
-            except NoSuchElementException:
-                pass
-            # Also try text-based detection
-            if "no matching jobs" in (driver.page_source or "").lower():
-                log.info("No results for '%s' in '%s'", keyword, location)
-                return jobs
-            log.warning("Timeout waiting for job results (keyword=%s, location=%s)", keyword, location)
+            log.warning("Timeout waiting for job links (keyword=%s, location=%s)", keyword, location)
             return jobs
 
-        cards = _find_all(driver, _JOB_CARD_SELECTORS)
-        if not cards:
-            log.info("No job cards found for '%s' in '%s'", keyword, location)
+        # Small pause to let any remaining lazy-loaded cards render
+        time.sleep(1)
+
+        # Extract jobs via JavaScript — this is fully resilient to
+        # LinkedIn DOM class name changes since it only relies on the
+        # stable /jobs/view/<id> URL pattern in <a> hrefs.
+        page_jobs: list[dict] = []
+        try:
+            page_jobs = driver.execute_script("""
+                var results = [];
+                var links = document.querySelectorAll('a[href*="/jobs/view/"]');
+                var seen = new Set();
+
+                for (var i = 0; i < links.length; i++) {
+                    var link = links[i];
+                    var href = link.href || '';
+                    var match = href.match(/\\/jobs\\/view\\/(\\d+)/);
+                    if (!match) continue;
+                    var jobId = match[1];
+                    if (seen.has(jobId)) continue;
+                    seen.add(jobId);
+
+                    // Get title from the link text.
+                    // Use the first line only — badge text like "with verification"
+                    // sometimes appears on subsequent lines inside the same <a>.
+                    var rawTitle = (link.innerText || '').trim();
+                    var title = rawTitle.split('\\n')[0].trim();
+                    if (title.length < 3) continue;
+
+                    // Walk up to the card container (the <li> in the results list)
+                    var card = link.closest('li') || link.closest('div[data-job-id]');
+                    if (!card) continue;
+
+                    var company = '';
+                    var location = '';
+
+                    // Strategy 1: Look for sibling/descendant elements by
+                    // common LinkedIn patterns. The company is usually in a
+                    // separate element below the title link.
+                    var companyEl = card.querySelector(
+                        'span.job-card-container__primary-description, ' +
+                        'a.job-card-container__company-name, ' +
+                        '.artdeco-entity-lockup__subtitle, ' +
+                        'div.artdeco-entity-lockup__subtitle'
+                    );
+                    if (companyEl) company = companyEl.innerText.trim();
+
+                    var locationEl = card.querySelector(
+                        'li.job-card-container__metadata-item, ' +
+                        'span.job-card-container__metadata-item, ' +
+                        '.artdeco-entity-lockup__caption, ' +
+                        'div.artdeco-entity-lockup__caption'
+                    );
+                    if (locationEl) location = locationEl.innerText.trim();
+
+                    // Strategy 2: If selectors didn't work, parse text lines.
+                    // Get all text from elements that are NOT the title link.
+                    if (!company) {
+                        var allText = [];
+                        var children = card.querySelectorAll('*');
+                        for (var c = 0; c < children.length; c++) {
+                            var el = children[c];
+                            // Skip the title link and its children
+                            if (el === link || link.contains(el)) continue;
+                            // Only leaf text nodes
+                            if (el.children.length === 0 && el.innerText) {
+                                var t = el.innerText.trim();
+                                if (t.length > 1 && t !== title && t.indexOf(title) === -1) {
+                                    allText.push(t);
+                                }
+                            }
+                        }
+                        // Remove noise like "Easy Apply", "Promoted", timestamps
+                        var noise = ['easy apply', 'promoted', 'viewed', 'applied',
+                                     'actively recruiting', 'be an early applicant',
+                                     'new', 'ago', 'reposted'];
+                        allText = allText.filter(function(t) {
+                            var lower = t.toLowerCase();
+                            for (var n = 0; n < noise.length; n++) {
+                                if (lower === noise[n] || lower.indexOf(' ago') !== -1) return false;
+                            }
+                            return true;
+                        });
+                        if (allText.length >= 1) company = allText[0];
+                        if (allText.length >= 2) location = allText[1];
+                    }
+
+                    results.push({
+                        title: title,
+                        company: company,
+                        location: location,
+                        url: 'https://www.linkedin.com/jobs/view/' + jobId + '/',
+                        job_id: jobId
+                    });
+                }
+                return results;
+            """) or []
+        except Exception as exc:
+            log.warning("JS job extraction failed: %s", exc)
+
+        if page_jobs:
+            log.info("Found %d job links on page for '%s' in '%s'", len(page_jobs), keyword, location)
+            jobs.extend(page_jobs)
+        else:
+            log.info("No job cards extracted for '%s' in '%s'", keyword, location)
             break
 
-        for card in cards:
-            try:
-                title_elem = _find_first(driver, _JOB_TITLE_SELECTORS, parent=card)
-                company_elem = _find_first(driver, _JOB_COMPANY_SELECTORS, parent=card)
-                location_elem = _find_first(driver, _JOB_LOCATION_SELECTORS, parent=card)
-
-                title = _safe_text(title_elem)
-                company = _safe_text(company_elem)
-                loc = _safe_text(location_elem)
-                job_url = _extract_job_url(card)
-                job_id = _extract_job_id(card)
-
-                if not title or not job_url:
-                    continue
-
-                jobs.append({
-                    "title": title,
-                    "company": company,
-                    "location": loc,
-                    "url": job_url,
-                    "job_id": job_id,
-                })
-            except StaleElementReferenceException:
-                log.debug("Stale card element, skipping")
-                continue
-
         # Check if there are more pages
-        if len(cards) < _RESULTS_PER_PAGE:
+        if len(page_jobs) < _RESULTS_PER_PAGE:
             break
 
         start += _RESULTS_PER_PAGE
@@ -343,15 +493,75 @@ def search_jobs(driver: uc.Chrome, keyword: str, location: str) -> list[dict]:
 
 def _click_easy_apply(driver: uc.Chrome) -> bool:
     """Find and click the Easy Apply button.  Returns True on success."""
+    # Try CSS selectors first (fast path)
     for sel in _EASY_APPLY_BUTTON_SELECTORS:
         try:
-            btn = WebDriverWait(driver, 5).until(
+            btn = WebDriverWait(driver, 2).until(
                 EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
             )
-            btn.click()
-            return True
+            # Verify this is actually an Easy Apply / Apply button
+            btn_text = _safe_text(btn).lower()
+            if "apply" in btn_text or "easy" in btn_text:
+                btn.click()
+                log.info("Clicked Easy Apply via selector: %s", sel)
+                return True
+            # If no text check, click anyway for aria-label matches
+            if "aria-label" in sel or "apply" in sel.lower():
+                btn.click()
+                log.info("Clicked Easy Apply via selector: %s", sel)
+                return True
         except (TimeoutException, ElementClickInterceptedException, NoSuchElementException):
             continue
+
+    # Text-based fallback: find ANY button containing "Easy Apply" or "Apply"
+    log.debug("CSS selectors failed, trying text-based button search")
+    try:
+        buttons = driver.find_elements(By.CSS_SELECTOR, "button")
+        for btn in buttons:
+            btn_text = _safe_text(btn).lower()
+            if "easy apply" in btn_text:
+                driver.execute_script("arguments[0].scrollIntoView(true);", btn)
+                time.sleep(0.3)
+                btn.click()
+                log.info("Clicked Easy Apply via text match: '%s'", btn_text.strip())
+                return True
+    except (StaleElementReferenceException, ElementClickInterceptedException):
+        pass
+
+    # XPath fallback: match by text content
+    try:
+        btn = driver.find_element(
+            By.XPATH, "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'easy apply')]"
+        )
+        driver.execute_script("arguments[0].scrollIntoView(true);", btn)
+        time.sleep(0.3)
+        driver.execute_script("arguments[0].click();", btn)
+        log.info("Clicked Easy Apply via XPath text match")
+        return True
+    except NoSuchElementException:
+        pass
+
+    # JavaScript fallback: search shadow DOM and iframes
+    try:
+        clicked = driver.execute_script("""
+            const buttons = document.querySelectorAll('button, [role="button"]');
+            for (const btn of buttons) {
+                const text = (btn.textContent || '').toLowerCase();
+                const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                if (text.includes('easy apply') || label.includes('easy apply')) {
+                    btn.scrollIntoView(true);
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        """)
+        if clicked:
+            log.info("Clicked Easy Apply via JavaScript fallback")
+            return True
+    except Exception:
+        pass
+
     return False
 
 
@@ -425,7 +635,7 @@ def _click_modal_button(driver: uc.Chrome, selectors: list[str], label_texts: li
             )
             btn.click()
             return True
-        except (TimeoutException, ElementClickInterceptedException, NoSuchElementException):
+        except (TimeoutException, ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException):
             continue
 
     # Text-based fallback
@@ -438,7 +648,7 @@ def _click_modal_button(driver: uc.Chrome, selectors: list[str], label_texts: li
                     if label.lower() in btn_text:
                         btn.click()
                         return True
-        except (StaleElementReferenceException, ElementClickInterceptedException):
+        except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException):
             pass
 
     return False
@@ -454,7 +664,7 @@ def _dismiss_modal(driver: uc.Chrome) -> None:
             By.CSS_SELECTOR, "button[aria-label='Dismiss']"
         )
         close_btn.click()
-    except (NoSuchElementException, ElementClickInterceptedException):
+    except (NoSuchElementException, ElementClickInterceptedException, ElementNotInteractableException):
         pass
 
     # Handle the "Discard application?" confirmation that appears when closing
@@ -464,7 +674,7 @@ def _dismiss_modal(driver: uc.Chrome) -> None:
             By.CSS_SELECTOR, "button[data-control-name='discard_application_confirm_btn']"
         )
         discard_btn.click()
-    except NoSuchElementException:
+    except (NoSuchElementException, ElementClickInterceptedException, ElementNotInteractableException):
         pass
 
     # Additional fallback: look for "Discard" button by text
@@ -474,7 +684,7 @@ def _dismiss_modal(driver: uc.Chrome) -> None:
             if _safe_text(btn).lower() == "discard":
                 btn.click()
                 break
-    except (StaleElementReferenceException, ElementClickInterceptedException):
+    except (StaleElementReferenceException, ElementClickInterceptedException, ElementNotInteractableException):
         pass
 
 
@@ -556,14 +766,32 @@ def apply_to_job(
     if not job_url:
         return ("failed", "no job URL")
 
-    try:
+    # run_category already loaded this job's detail panel (either by clicking
+    # the card in search results or by navigating).  Only navigate if we
+    # somehow ended up on a different page.
+    current_url = driver.current_url or ""
+    job_id = job.get("job_id", "")
+    needs_nav = job_url and "/jobs/search/" not in current_url and job_id not in current_url
+
+    if needs_nav:
         driver.get(job_url)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.jobs-unified-top-card"))
-        )
-    except TimeoutException:
-        # Page may have loaded with a different structure — continue
-        pass
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: d.execute_script("""
+                    var buttons = document.querySelectorAll('button, [role="button"]');
+                    for (var i = 0; i < buttons.length; i++) {
+                        var text = (buttons[i].textContent || '').toLowerCase();
+                        var label = (buttons[i].getAttribute('aria-label') || '').toLowerCase();
+                        if (text.includes('easy apply') || label.includes('easy apply') ||
+                            text.includes('applied')) {
+                            return true;
+                        }
+                    }
+                    return false;
+                """)
+            )
+        except TimeoutException:
+            return ("failed", "job page did not load Easy Apply button")
 
     # Check "Already applied"
     if _is_already_applied(driver):
@@ -586,14 +814,18 @@ def apply_to_job(
     # Step through modal pages
     max_pages = 10  # safety cap
     for page_num in range(max_pages):
-        time.sleep(0.5)  # brief pause for page transition
+        time.sleep(1)  # pause for page transition and DOM to settle
 
         modal = _get_modal(driver)
         if modal is None:
             # Modal closed — might mean submission happened
             break
 
-        # Find all form fields on current page
+        # Find all form fields on current page.
+        # Re-find modal and fields to avoid stale references after DOM changes.
+        modal = _get_modal(driver)
+        if modal is None:
+            break
         fields = _find_form_fields(modal)
 
         for field in fields:
@@ -621,6 +853,14 @@ def apply_to_job(
                 if field_type in ("radio", "checkbox"):
                     if field.is_selected():
                         continue
+                    # Skip resume selection radios — the correct resume is
+                    # already uploaded/selected. Also skip "top choice".
+                    field_id = field.get_attribute("id") or ""
+                    field_name = field.get_attribute("name") or ""
+                    skip_patterns = ["document", "resume", "topchoice", "topChoice"]
+                    if any(p.lower() in (field_id + field_name).lower() for p in skip_patterns):
+                        log.debug("Skipping non-question field: %s", field_id or field_name)
+                        continue
 
                 question_text = form_filler.extract_question_text(field)
                 if not question_text:
@@ -632,19 +872,24 @@ def apply_to_job(
                     driver, field, question_text, field_type,
                     options, form_filler.resume, form_filler.category,
                 )
-            except StaleElementReferenceException:
-                log.debug("Stale element on page %d, skipping field", page_num)
+            except (StaleElementReferenceException, ElementNotInteractableException):
+                log.debug("Element issue on page %d, skipping field", page_num)
                 continue
             except Exception as exc:
                 log.warning("Error filling field on page %d: %s", page_num, exc)
                 continue
 
         # Determine which button to click: Submit > Review > Next
+        # In dry-run mode, treat Submit like Review — don't click it.
+        if dry_run:
+            # Check if Submit is present without clicking it
+            submit_present = _find_first(driver, _SUBMIT_BUTTON_SELECTORS)
+            if submit_present:
+                log.info("Dry-run: Submit button found, closing without submitting")
+                _dismiss_modal(driver)
+                return ("skipped", "dry run")
+
         if _click_modal_button(driver, _SUBMIT_BUTTON_SELECTORS, ["submit"]):
-            if dry_run:
-                # In dry_run we shouldn't have reached submit — but if we
-                # do, we already clicked.  Log a warning.
-                log.warning("Dry-run: Submit button was clicked unexpectedly")
             # Wait briefly for confirmation
             time.sleep(1)
             _dismiss_modal(driver)
@@ -724,6 +969,8 @@ def run_category(
     stats.setdefault("skipped", 0)
     stats.setdefault("failed", 0)
 
+    seen_job_ids: set[str] = set()
+
     for keyword in keywords:
         for loc_idx, location in enumerate(locations):
             if shutdown_check and shutdown_check():
@@ -753,6 +1000,13 @@ def run_category(
                     )
                     return
 
+                # --- Dedup: skip jobs we've already seen ---
+                jid = job.get("job_id", "")
+                if jid and jid in seen_job_ids:
+                    continue
+                if jid:
+                    seen_job_ids.add(jid)
+
                 # --- Title filter ---
                 skip, reason = filters.should_skip_title(job.get("title", ""))
                 if skip:
@@ -768,16 +1022,89 @@ def run_category(
                     stats["skipped"] += 1
                     continue
 
-                # --- Navigate and check description ---
-                try:
+                # --- Click job card in search results to load details ---
+                log.info("Checking: %s @ %s", job.get("title", "?"), job.get("company", "?"))
+
+                # Click the job card in the search results sidebar instead of
+                # doing a full driver.get(). This loads the detail in the right
+                # panel via AJAX which is much faster.
+                job_clicked = False
+                jid = job.get("job_id", "")
+                if jid:
+                    try:
+                        job_clicked = driver.execute_script("""
+                            var jobId = arguments[0];
+                            // Try clicking a link to this job in the results list
+                            var links = document.querySelectorAll('a[href*="/jobs/view/' + jobId + '"]');
+                            for (var i = 0; i < links.length; i++) {
+                                var link = links[i];
+                                // Make sure it's in the results list, not the detail panel
+                                var card = link.closest('li');
+                                if (card) {
+                                    link.click();
+                                    return true;
+                                }
+                            }
+                            return false;
+                        """, jid)
+                    except Exception:
+                        job_clicked = False
+
+                if not job_clicked:
+                    # Fallback: full page navigation
                     driver.get(job.get("url", ""))
+
+                # Wait for the Easy Apply button to appear in the detail panel
+                try:
                     WebDriverWait(driver, 10).until(
-                        EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, ", ".join(_DESCRIPTION_SELECTORS))
-                        )
+                        lambda d: d.execute_script("""
+                            var buttons = document.querySelectorAll('button, [role="button"]');
+                            for (var i = 0; i < buttons.length; i++) {
+                                var text = (buttons[i].textContent || '').toLowerCase();
+                                var label = (buttons[i].getAttribute('aria-label') || '').toLowerCase();
+                                if (text.includes('easy apply') || label.includes('easy apply'))
+                                    return true;
+                            }
+                            return false;
+                        """)
                     )
                 except TimeoutException:
-                    pass
+                    log.info("No Easy Apply button on page, skipping")
+                    app_logger.log_application(
+                        category=category,
+                        company=job.get("company", ""),
+                        title=job.get("title", ""),
+                        location=job.get("location", ""),
+                        status="SKIPPED",
+                        reason="no Easy Apply on page",
+                        url=job.get("url", ""),
+                    )
+                    stats["skipped"] += 1
+                    continue
+
+                # Enrich company/location from the detail panel if missing
+                if not job.get("company"):
+                    try:
+                        detail = driver.execute_script("""
+                            var co = document.querySelector(
+                                'a[href*="/company/"]'
+                            );
+                            var loc = document.querySelector(
+                                'span.jobs-unified-top-card__bullet, ' +
+                                'span.job-details-jobs-unified-top-card__bullet'
+                            );
+                            return {
+                                company: co ? co.innerText.trim() : '',
+                                location: loc ? loc.innerText.trim() : ''
+                            };
+                        """)
+                        if detail:
+                            if detail.get("company"):
+                                job["company"] = detail["company"]
+                            if detail.get("location") and not job.get("location"):
+                                job["location"] = detail["location"]
+                    except Exception:
+                        pass
 
                 description = get_job_description(driver)
                 skip, reason = filters.should_skip_description(description)
@@ -797,9 +1124,18 @@ def run_category(
                 # --- Apply ---
                 filler = FormFiller(resume_data, category)
 
-                status, apply_reason = apply_to_job(
-                    driver, job, resume_path, filler, dry_run=dry_run,
-                )
+                try:
+                    status, apply_reason = apply_to_job(
+                        driver, job, resume_path, filler, dry_run=dry_run,
+                    )
+                except Exception as exc:
+                    log.warning("Exception during apply: %s", exc)
+                    status, apply_reason = "failed", f"exception: {type(exc).__name__}"
+                    # Try to clean up any open modal
+                    try:
+                        _dismiss_modal(driver)
+                    except Exception:
+                        pass
 
                 status_upper = status.upper()
                 app_logger.log_application(
@@ -820,12 +1156,14 @@ def run_category(
                     stats["failed"] += 1
 
                 # Rate-limiting delay between applications
-                delay = random.uniform(delay_min, delay_max)
-                log.debug("Sleeping %.1f seconds between applications", delay)
-                time.sleep(delay)
+                # TODO: Re-enable delays for production use
+                # delay = random.uniform(delay_min, delay_max)
+                # log.debug("Sleeping %.1f seconds between applications", delay)
+                # time.sleep(delay)
 
             # Delay between location searches (skip after last location)
-            if loc_idx < len(locations) - 1:
-                search_delay = random.uniform(search_delay_min, search_delay_max)
-                log.debug("Sleeping %.1f seconds between searches", search_delay)
-                time.sleep(search_delay)
+            # TODO: Re-enable delays for production use
+            # if loc_idx < len(locations) - 1:
+            #     search_delay = random.uniform(search_delay_min, search_delay_max)
+            #     log.debug("Sleeping %.1f seconds between searches", search_delay)
+            #     time.sleep(search_delay)
