@@ -9,3 +9,4 @@ Application deduplication across sessions using a persistent seen-jobs database
 Auto-detect and handle LinkedIn CAPTCHA challenges with manual intervention pause
 Dashboard notification system — browser push notifications for applied/failed events
 Resume A/B testing — rotate between resume variants and track which gets more responses
+Make the logo into an S instead of an A
