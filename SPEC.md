@@ -6,13 +6,13 @@ Automated job application tool that searches LinkedIn for entry/junior level pos
 
 ## User Profile
 
-- **Name:** Mustafa Nazeer
-- **Email:** Mustafa421670@gmail.com
-- **Phone:** 682-552-0927
-- **LinkedIn:** linkedin.com/in/mustafa-nazeer
-- **GitHub:** github.com/Mustafan4x
-- **University:** University of Texas at Arlington, BS Computer Science, Expected May 2027
-- **Location:** Arlington, TX
+- **Name:** *(set in plain_text_resume.yaml)*
+- **Email:** *(set in plain_text_resume.yaml)*
+- **Phone:** *(set in plain_text_resume.yaml)*
+- **LinkedIn:** *(set in plain_text_resume.yaml)*
+- **GitHub:** *(set in plain_text_resume.yaml)*
+- **University:** *(set in plain_text_resume.yaml)*
+- **Location:** *(set in plain_text_resume.yaml)*
 - **Work Authorization:** Yes, authorized to work in the US
 - **Willing to relocate:** Within DFW metroplex
 - **LinkedIn Premium:** Yes
@@ -150,15 +150,15 @@ headless: false  # set true to run without visible browser
 ### plain_text_resume.yaml
 ```yaml
 personal:
-  name: "Mustafa Nazeer"
-  email: "Mustafa421670@gmail.com"
-  phone: "682-552-0927"
-  location: "Arlington, TX"
-  linkedin: "linkedin.com/in/mustafa-nazeer"
-  github: "github.com/Mustafan4x"
+  name: "Your Name"
+  email: "your.email@example.com"
+  phone: "555-555-0100"
+  location: "Your City, ST"
+  linkedin: "linkedin.com/in/your-profile"
+  github: "github.com/your-username"
 
 education:
-  school: "University of Texas at Arlington"
+  school: "Your University"
   degree: "Bachelor of Science in Computer Science"
   graduation: "May 2027"
   coursework:
@@ -171,13 +171,13 @@ education:
 
 experience:
   - title: "Software Engineering Intern"
-    company: "Fielder Postal Center"
-    location: "Arlington, TX"
+    company: "Acme Corp"
+    location: "Your City, ST"
     dates: "May 2025 - Aug 2025"
     bullets:
-      - "Developed internal inventory tracking scripts in Python to automate package logging and reduce manual data entry errors by 40%"
-      - "Designed and implemented a relational database schema to manage shipment records, customer accounts, and transaction histories across 500+ weekly parcels"
-      - "Built automated reporting tools generating daily volume summaries and exception alerts, reducing end-of-day reconciliation time from 45 minutes to under 10"
+      - "Developed internal inventory tracking scripts in Python"
+      - "Designed and implemented a relational database schema"
+      - "Built automated reporting tools generating daily summaries"
 
 projects:
   - name: "AdrenalineAI"

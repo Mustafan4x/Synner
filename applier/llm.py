@@ -173,10 +173,68 @@ def _check_hardcoded(question: str, options: list[str] | None, resume: dict, cat
     )):
         return _pick_option("Yes", options)
 
-    # Sponsorship
+    # Sponsorship — never need it
     if any(p in q for p in (
         "require sponsorship", "visa sponsorship", "need sponsorship",
         "sponsorship", "require visa", "immigration sponsorship",
+        "h-1b", "h1b", "h 1b",
+    )):
+        return _pick_option("No", options)
+
+    # Background check / drug test / reference check — always willing
+    if any(p in q for p in (
+        "background check", "background investigation", "background screening",
+        "criminal background", "drug test", "drug screen", "drug screening",
+        "reference check", "consent to a background",
+        "willing to undergo", "willing to submit",
+    )):
+        return _pick_option("Yes", options)
+
+    # ── EEO / self-identification questions ──────────────────────────────
+    # LinkedIn and company application portals commonly ask voluntary
+    # self-identification questions. Answers below reflect the applicant's
+    # actual self-identification.
+
+    # Gender / sex
+    if any(p in q for p in (
+        "gender identity", "what is your gender", "your gender",
+        "gender?", "sex?", "biological sex", "sex assigned at birth",
+        "male or female", "identify as",
+    )) and "transgender" not in q:
+        return _pick_option("Male", options)
+
+    # Transgender
+    if "transgender" in q or "trans identity" in q:
+        return _pick_option("No", options)
+
+    # Sexual orientation
+    if any(p in q for p in (
+        "sexual orientation", "lgbt", "lgbtq", "lgbtqia",
+        "gay", "lesbian", "bisexual", "queer",
+    )):
+        return _pick_option("Heterosexual", options)
+
+    # Race / ethnicity. LinkedIn forms use varied wordings; look for the
+    # common triggers and return a preferred option. _pick_option's
+    # substring fallback will match "Asian" inside "Asian (not Hispanic or
+    # Latino)" or "Asian / Pacific Islander".
+    if any(p in q for p in (
+        "race", "ethnicity", "ethnic", "racial", "hispanic or latino",
+        "hispanic/latino",
+    )):
+        return _pick_option("Asian", options)
+
+    # Veteran / military status
+    if any(p in q for p in (
+        "veteran", "military service", "armed forces", "protected veteran",
+        "served in the military", "active duty",
+    )):
+        return _pick_option("No", options)
+
+    # Disability status
+    if any(p in q for p in (
+        "disability", "disabled", "long-term condition",
+        "chronic condition", "ada accommodation",
     )):
         return _pick_option("No", options)
 
@@ -226,6 +284,45 @@ def _check_hardcoded(question: str, options: list[str] | None, resume: dict, cat
     # Willing to relocate
     if "willing to relocate" in q or "open to relocation" in q:
         return _pick_option("Yes, within DFW", options)
+
+    # "Recruiter-friendly Yes" bucket — any question about willingness,
+    # availability, or flexibility that a hiring manager would want to hear
+    # "Yes" to. We default to Yes on all of these so the application keeps
+    # moving. Ordered after relocation/sponsorship/auth so those more
+    # specific rules still win.
+    recruiter_yes_patterns = (
+        # Work arrangement
+        "work on-site", "work onsite", "work in office", "work in-office",
+        "work in the office", "on-site work", "onsite work", "in-office work",
+        "comfortable working on", "comfortable working in the office",
+        "able to work on-site", "able to work onsite", "able to work in office",
+        "willing to work on-site", "willing to work onsite",
+        "willing to work in office", "willing to work in-office",
+        "work hybrid", "hybrid schedule", "hybrid work", "willing to work hybrid",
+        "work remote", "work remotely", "remote work", "willing to work remote",
+        # Hours / schedule
+        "willing to work overtime", "work overtime", "overtime if needed",
+        "work weekends", "willing to work weekends",
+        "work nights", "work night shift", "work evenings",
+        "work holidays", "willing to work holidays",
+        "shift work", "rotating shifts", "willing to work shifts",
+        "flexible hours", "flexible schedule", "flexible with your schedule",
+        "extended hours", "long hours",
+        # Commute / travel
+        "willing to commute", "able to commute", "reliable transportation",
+        "own transportation", "own vehicle", "own a car",
+        "willing to travel", "able to travel", "travel for work",
+        "travel up to", "travel as needed",
+        # Interview / onboarding
+        "able to attend", "available for an interview", "come in for an interview",
+        "in-person interview", "on-site interview",
+        # General willingness / capability framing
+        "are you able to", "are you willing to", "are you comfortable",
+        "are you open to", "can you work", "can you perform",
+        "physically able", "lift", "stand for",
+    )
+    if any(p in q for p in recruiter_yes_patterns):
+        return _pick_option("Yes", options)
 
     # Available start date
     if "start date" in q or "available to start" in q or "earliest start" in q:
@@ -305,17 +402,27 @@ def _pick_option(preferred: str, options: list[str] | None) -> str:
         if opt.lower().strip() == preferred_lower:
             return opt
 
-    # Substring / containment match
-    for opt in options:
-        opt_lower = opt.lower().strip()
-        if preferred_lower in opt_lower or opt_lower in preferred_lower:
-            return opt
-
-    # For yes/no answers, match on the first word
+    # Yes/No answers must be matched by the option's first word, NOT by
+    # substring. "no" is a substring of "now", "not", "none", etc., which
+    # previously caused "No" preferences to match affirmative options like
+    # "Yes, now" or "Yes, I do not need sponsorship".
     first_word = preferred_lower.split(",")[0].split("/")[0].split()[0] if preferred_lower else ""
     if first_word in ("yes", "no"):
         for opt in options:
-            if opt.lower().strip().startswith(first_word):
+            # Match on the option's first alphabetic word only.
+            opt_first = opt.lower().strip().lstrip("-•* ").split(",")[0].split()[0] if opt.strip() else ""
+            if opt_first == first_word:
+                return opt
+        # No match by first word — fall through to the last-resort fallback,
+        # skipping substring matching entirely for yes/no answers.
+        return options[0]
+
+    # Substring / containment match — only for longer preferences where
+    # accidental substring collisions are unlikely.
+    if len(preferred_lower) >= 4:
+        for opt in options:
+            opt_lower = opt.lower().strip()
+            if preferred_lower in opt_lower or opt_lower in preferred_lower:
                 return opt
 
     # Fallback: return the first option
@@ -358,8 +465,33 @@ def answer_question(
         "- If asked for a city or location, answer 'Arlington, TX'\n"
         "- Keep free-text answers to 1-2 sentences, professional and confident\n"
         "- Always be positive about the applicant's qualifications\n"
-        "- For work authorization: Yes. For sponsorship: No.\n"
-        "- When in doubt, give the answer most likely to get the applicant hired\n\n"
+        "- For work authorization: Yes. For sponsorship: No.\n\n"
+        "APPLICANT SELF-IDENTIFICATION (use these for any EEO / demographic question):\n"
+        "- Gender identity: Male\n"
+        "- Sex: Male (assigned at birth)\n"
+        "- Transgender: No\n"
+        "- Sexual orientation: Heterosexual / Straight\n"
+        "- Race / ethnicity: Asian (South Asian specifically; pick the closest option)\n"
+        "- Hispanic / Latino: No\n"
+        "- Protected veteran / military service: No\n"
+        "- Disability: No\n"
+        "- Work authorization in the US: Yes\n"
+        "- Visa / sponsorship required: No\n\n"
+        "THINK LIKE A DESPERATE APPLICANT WHO NEEDS THIS JOB:\n"
+        "Before answering any yes/no question, ask yourself: 'What answer would the\n"
+        "recruiter want to hear from an ideal candidate?' That is your answer.\n"
+        "- Willing/able to work onsite, hybrid, remote, overtime, weekends, nights,\n"
+        "  holidays, shifts, long hours, early mornings? → YES\n"
+        "- Willing/able to commute, travel, relocate, drive, attend in-person? → YES\n"
+        "- Comfortable with the pace, environment, team, tools, dress code? → YES\n"
+        "- Have reliable transportation? → YES\n"
+        "- Able to lift/stand/walk/physical requirement? → YES (unless resume explicitly says otherwise)\n"
+        "- Willing to undergo background check, drug test, reference check? → YES\n"
+        "- Can you start immediately? → YES\n"
+        "- Only answer NO when saying Yes would be clearly dishonest (e.g. a\n"
+        "  specific license/certification not on the resume, years of experience\n"
+        "  with a tech not on the resume, work authorization you don't have).\n"
+        "When genuinely in doubt, say Yes. A human reviewer will decide later.\n\n"
         f"APPLICANT RESUME:\n{resume_text}"
     )
 

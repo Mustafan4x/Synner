@@ -34,6 +34,7 @@ _CSV_PATH = _PROJECT_ROOT / "applications.csv"
 _CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 _RUN_SCRIPT = _PROJECT_ROOT / "run.py"
 _LOG_PATH = _PROJECT_ROOT / ".session_log"
+_BOUNDS_PATH = _PROJECT_ROOT / ".session_boundaries.json"
 
 # ---------------------------------------------------------------------------
 # Subprocess management
@@ -51,6 +52,88 @@ def _is_process_running() -> bool:
         if _current_process is None:
             return False
         return _current_process.poll() is None
+
+
+# ---------------------------------------------------------------------------
+# Session boundary tracking
+# ---------------------------------------------------------------------------
+#
+# Persists the start/end timestamps of the most recent two dashboard-launched
+# sessions to .session_boundaries.json. Used to split CSV rows into
+# "current session" / "previous session" / "alltime" buckets for the UI.
+#
+# Shape:
+#   {
+#     "current":  {"start": 1712789000.0, "end": null},  # null while running
+#     "previous": {"start": 1712700000.0, "end": 1712710000.0}
+#   }
+
+
+def _load_session_bounds() -> dict:
+    """Load the persisted session boundary file, or return empty defaults."""
+    if not _BOUNDS_PATH.exists():
+        return {"current": None, "previous": None}
+    try:
+        with open(_BOUNDS_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return {"current": None, "previous": None}
+        return {
+            "current": data.get("current"),
+            "previous": data.get("previous"),
+        }
+    except (OSError, json.JSONDecodeError):
+        return {"current": None, "previous": None}
+
+
+def _save_session_bounds(bounds: dict) -> None:
+    """Persist the session boundary dict to disk."""
+    try:
+        with open(_BOUNDS_PATH, "w", encoding="utf-8") as fh:
+            json.dump(bounds, fh)
+    except OSError:
+        pass
+
+
+def _begin_session(start_ts: float) -> None:
+    """Rotate current→previous and set a new current session window."""
+    bounds = _load_session_bounds()
+    old_current = bounds.get("current")
+    if old_current is not None:
+        # Close out a previously-running session that never got its end set
+        # (e.g., dashboard crashed mid-run). Best-effort — use start_ts as
+        # the end since that's the latest thing we know for sure.
+        if old_current.get("end") is None:
+            old_current["end"] = start_ts
+        bounds["previous"] = old_current
+    bounds["current"] = {"start": start_ts, "end": None}
+    _save_session_bounds(bounds)
+
+
+def _end_session(end_ts: float) -> None:
+    """Close the current session window by setting its end timestamp."""
+    bounds = _load_session_bounds()
+    current = bounds.get("current")
+    if current is not None and current.get("end") is None:
+        current["end"] = end_ts
+        bounds["current"] = current
+        _save_session_bounds(bounds)
+
+
+def _reconcile_session_bounds() -> dict:
+    """Return session bounds, auto-closing current if the process has died.
+
+    The subprocess can exit without triggering /api/stop (completed normally,
+    crashed, Ctrl+C'd in terminal). On each read, check if we still think a
+    session is running and verify the subprocess is actually alive.
+    """
+    bounds = _load_session_bounds()
+    current = bounds.get("current")
+    if current is not None and current.get("end") is None and not _is_process_running():
+        current["end"] = time.time()
+        bounds["current"] = current
+        _save_session_bounds(bounds)
+    return bounds
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +195,13 @@ def _load_config() -> dict:
         }
     with open(_CONFIG_PATH, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def _mask_api_key(key: str) -> str:
+    """Mask an API key for display, showing only the last 4 characters."""
+    if not key or key == "sk-..." or len(key) < 8:
+        return ""
+    return "sk-..." + key[-4:]
 
 
 def _save_config(data: dict) -> None:
@@ -281,46 +371,107 @@ def _build_mock_data() -> dict:
         "radar": radar,
         "status": "running",
         "session_elapsed": "01:23:45",
-        "user": "Mustafa Nazeer",
+        "user": "Synner User",
     }
 
 
-def _build_real_data() -> dict:
-    """Build dashboard data from the real applications.csv file."""
-    rows = _read_csv()
+def _parse_row_ts(row: dict) -> float | None:
+    """Parse a CSV row's date field into a unix timestamp, or None on failure."""
+    date_str = row.get("date", "")
+    if not date_str:
+        return None
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+        return dt.timestamp()
+    except ValueError:
+        return None
 
+
+def _aggregate_bucket(rows: list[dict]) -> dict:
+    """Compute stat totals, category breakdowns, and radar values for a bucket."""
     cat_stats: dict[str, dict[str, int]] = {}
     for cat in ("SWE", "FS", "MLAI", "DE"):
         cat_stats[cat] = {"applied": 0, "skipped": 0, "failed": 0, "limit": 30}
 
-    total_applied = 0
-    total_skipped = 0
-    total_failed = 0
-
+    applied = skipped = failed = 0
     for row in rows:
         status = (row.get("status") or "").upper()
         cat = row.get("category", "")
+        if status == "APPLIED":
+            applied += 1
+        elif status == "SKIPPED":
+            skipped += 1
+        else:
+            failed += 1
         if cat in cat_stats:
             if status == "APPLIED":
                 cat_stats[cat]["applied"] += 1
-                total_applied += 1
             elif status == "SKIPPED":
                 cat_stats[cat]["skipped"] += 1
-                total_skipped += 1
             else:
                 cat_stats[cat]["failed"] += 1
-                total_failed += 1
 
-    total = total_applied + total_skipped + total_failed
-
-    session = {
-        "applied": total_applied,
-        "skipped": total_skipped,
-        "failed": total_failed,
+    total = applied + skipped + failed
+    success_rate = round(applied / total * 100) if total > 0 else 0
+    radar = {
+        cat: round(vals["applied"] / vals["limit"], 2) if vals["limit"] > 0 else 0
+        for cat, vals in cat_stats.items()
+    }
+    return {
+        "applied": applied,
+        "skipped": skipped,
+        "failed": failed,
         "total": total,
+        "categories": cat_stats,
+        "radar": radar,
+        "success_rate": success_rate,
     }
 
-    success_rate = round(total_applied / total * 100) if total > 0 else 0
+
+def _split_rows_by_bounds(rows: list[dict], bounds: dict) -> dict:
+    """Return (current_rows, previous_rows, all_rows) split by session bounds."""
+    current_rows: list[dict] = []
+    previous_rows: list[dict] = []
+
+    cur_bound = bounds.get("current")
+    prev_bound = bounds.get("previous")
+
+    cur_start = cur_bound["start"] if cur_bound else None
+    cur_end = cur_bound.get("end") if cur_bound else None
+    prev_start = prev_bound["start"] if prev_bound else None
+    prev_end = prev_bound.get("end") if prev_bound else None
+
+    for row in rows:
+        ts = _parse_row_ts(row)
+        if ts is None:
+            continue
+        if cur_start is not None and ts >= cur_start:
+            if cur_end is None or ts <= cur_end:
+                current_rows.append(row)
+                continue
+        if prev_start is not None and prev_end is not None:
+            if prev_start <= ts <= prev_end:
+                previous_rows.append(row)
+
+    return {"current": current_rows, "previous": previous_rows, "alltime": rows}
+
+
+def _build_real_data() -> dict:
+    """Build dashboard data from the real applications.csv file.
+
+    Returns three buckets — current session, previous session, all-time —
+    each with its own totals, per-category breakdown, success rate, and
+    radar values. The frontend switches between them via tabs.
+    """
+    rows = _read_csv()
+    bounds = _reconcile_session_bounds()
+
+    split = _split_rows_by_bounds(rows, bounds)
+    current_bucket = _aggregate_bucket(split["current"])
+    previous_bucket = _aggregate_bucket(split["previous"])
+    alltime_bucket = _aggregate_bucket(split["alltime"])
+
+    running = _is_process_running()
 
     # Build feed from last 50 rows (most recent first)
     feed = []
@@ -344,23 +495,51 @@ def _build_real_data() -> dict:
             "reason": row.get("reason", ""),
         })
 
-    # Radar values
-    radar = {}
-    for cat, vals in cat_stats.items():
-        limit = vals["limit"]
-        radar[cat] = round(vals["applied"] / limit, 2) if limit > 0 else 0
+    # The "active" bucket is what the default tab shows on load:
+    # running session → current, idle → previous (fall back to alltime if
+    # there's no previous session yet).
+    if running:
+        active_bucket = current_bucket
+        active_label = "current"
+    elif previous_bucket["total"] > 0:
+        active_bucket = previous_bucket
+        active_label = "previous"
+    else:
+        active_bucket = alltime_bucket
+        active_label = "alltime"
 
     return {
-        "session": session,
-        "alltime": session,  # same as session until multi-session tracking is added
+        # Legacy keys kept for template compatibility — point at the active
+        # bucket so unmodified server-side render shows sensible defaults.
+        "session": {
+            "applied": active_bucket["applied"],
+            "skipped": active_bucket["skipped"],
+            "failed": active_bucket["failed"],
+            "total": active_bucket["total"],
+        },
+        "alltime": {
+            "applied": alltime_bucket["applied"],
+            "skipped": alltime_bucket["skipped"],
+            "failed": alltime_bucket["failed"],
+            "total": alltime_bucket["total"],
+        },
         "trends": {"applied": 0, "skipped": 0, "failed": 0},
-        "categories": cat_stats,
+        "categories": active_bucket["categories"],
         "feed": feed,
-        "success_rate": success_rate,
-        "radar": radar,
-        "status": "running" if _is_process_running() else "idle",
+        "success_rate": active_bucket["success_rate"],
+        "radar": active_bucket["radar"],
+        "status": "running" if running else "idle",
         "session_elapsed": "00:00:00",
-        "user": "Mustafa Nazeer",
+        "user": "Synner User",
+
+        # New: full bucket data consumed by the tab-switching JS.
+        "buckets": {
+            "current": current_bucket,
+            "previous": previous_bucket,
+            "alltime": alltime_bucket,
+        },
+        "active_bucket": active_label,
+        "has_previous": previous_bucket["total"] > 0,
     }
 
 
@@ -397,12 +576,13 @@ def create_app() -> Flask:
 
     @app.route("/api/stats")
     def api_stats() -> tuple:
-        """Return current stats as JSON."""
+        """Return current stats as JSON, including all three buckets."""
         data = _build_real_data()
         return jsonify({
-            "session": data["session"],
-            "alltime": data["alltime"],
-            "categories": data["categories"],
+            "status": data["status"],
+            "active_bucket": data["active_bucket"],
+            "has_previous": data["has_previous"],
+            "buckets": data["buckets"],
         })
 
     # ── History ───────────────────────────────────────────────────────────
@@ -427,10 +607,10 @@ def create_app() -> Flask:
         if request.method == "POST":
             try:
                 config = _load_config()
-                # Update from form data
-                config["openai_api_key"] = request.form.get(
-                    "openai_api_key", config.get("openai_api_key", "")
-                )
+                # Only update API key if user provided a new one (not the masked placeholder)
+                new_key = request.form.get("openai_api_key", "").strip()
+                if new_key and not new_key.startswith("sk-..."):
+                    config["openai_api_key"] = new_key
                 config["delay_min_seconds"] = int(
                     request.form.get("delay_min_seconds", 30)
                 )
@@ -457,6 +637,7 @@ def create_app() -> Flask:
                 return jsonify({"success": False, "error": str(exc)})
 
         config = _load_config()
+        config["openai_api_key_masked"] = _mask_api_key(config.get("openai_api_key", ""))
         return render_template(
             "settings.html",
             config=config,
@@ -492,8 +673,17 @@ def create_app() -> Flask:
             headless = body.get("headless", False)
 
             cmd = [sys.executable, "-u", str(_RUN_SCRIPT)]
-            if len(categories) == 1:
-                cmd.extend(["--category", categories[0]])
+            # Forward the full selected-category list. If the user unchecks
+            # everything we refuse the start rather than silently running all
+            # four via run.py's default.
+            if categories:
+                cmd.append("--category")
+                cmd.extend(categories)
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Select at least one category before starting a session.",
+                })
             if dry_run:
                 cmd.append("--dry-run")
             if headless:
@@ -516,6 +706,9 @@ def create_app() -> Flask:
                     stderr=subprocess.STDOUT,
                 )
                 _session_start_time = time.time()
+                # Rotate current→previous in the persisted boundary file so
+                # the dashboard can split CSV rows into the correct buckets.
+                _begin_session(_session_start_time)
                 return jsonify({"success": True, "pid": _current_process.pid, "start_time": _session_start_time})
             except Exception as exc:
                 return jsonify({"success": False, "error": str(exc)})
@@ -531,6 +724,7 @@ def create_app() -> Flask:
                 if _log_file_handle and not _log_file_handle.closed:
                     _log_file_handle.close()
                     _log_file_handle = None
+                _end_session(time.time())
                 return jsonify({"success": True, "message": "No session running"})
 
             try:
@@ -545,6 +739,7 @@ def create_app() -> Flask:
                 if _log_file_handle and not _log_file_handle.closed:
                     _log_file_handle.close()
                     _log_file_handle = None
+                _end_session(time.time())
                 return jsonify({"success": True})
             except Exception as exc:
                 return jsonify({"success": False, "error": str(exc)})

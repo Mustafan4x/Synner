@@ -72,7 +72,7 @@ class TestLoadResume:
         resume_file.write_text(yaml.dump(sample_resume))
 
         result = load_resume(str(resume_file))
-        assert result["personal"]["name"] == "Mustafa Nazeer"
+        assert result["personal"]["name"] == "Test User"
         assert len(result["projects"]) == 2
 
     def test_missing_resume_file_raises(self, tmp_path) -> None:

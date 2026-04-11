@@ -46,6 +46,13 @@ class FormFiller:
         if tag_name == "select":
             return "dropdown"
 
+        # Custom ARIA combobox — LinkedIn renders some dropdowns as a button
+        # or div that opens a listbox instead of a native <select>.
+        role = (element.get_attribute("role") or "").lower()
+        haspopup = (element.get_attribute("aria-haspopup") or "").lower()
+        if role == "combobox" or haspopup == "listbox":
+            return "dropdown"
+
         if tag_name == "input":
             input_type = (element.get_attribute("type") or "text").lower()
             if input_type in _TEXT_INPUT_TYPES:
@@ -117,6 +124,70 @@ class FormFiller:
         except Exception:
             pass
 
+        # Strategies 6+ only run when the common label-lookup paths above
+        # have all failed. They handle the weirder LinkedIn DOM shapes where
+        # the question text lives on an ancestor heading or fieldset legend
+        # rather than on a directly associated label.
+
+        # Strategy 6: closest ancestor fieldset's <legend> (radio groups)
+        try:
+            legend = element.find_element(
+                By.XPATH, "./ancestor::fieldset[1]/legend"
+            )
+            text = legend.text.strip()
+            if text:
+                return text
+        except Exception:
+            pass
+
+        # Strategy 7: aria-labelledby — common for grouped questions
+        labelledby = element.get_attribute("aria-labelledby")
+        if labelledby:
+            try:
+                driver = element.parent
+                # aria-labelledby can reference multiple IDs separated by space
+                parts: list[str] = []
+                for ref_id in labelledby.split():
+                    try:
+                        ref = driver.find_element(By.ID, ref_id)
+                        ref_text = ref.text.strip()
+                        if ref_text:
+                            parts.append(ref_text)
+                    except Exception:
+                        continue
+                if parts:
+                    return " ".join(parts)
+            except Exception:
+                pass
+
+        # Strategy 8: walk up to 4 ancestors and look for a heading-like
+        # child (span/div/h3/h4/legend) whose text ends with ? or : — that's
+        # almost always the question. Stops at the first match.
+        try:
+            current = element
+            for _ in range(4):
+                try:
+                    current = current.find_element(By.XPATH, "./..")
+                except Exception:
+                    break
+                try:
+                    candidates = current.find_elements(
+                        By.XPATH, ".//span | .//div | .//h3 | .//h4 | .//legend | .//p"
+                    )
+                except Exception:
+                    continue
+                for cand in candidates:
+                    try:
+                        text = (cand.text or "").strip()
+                    except Exception:
+                        continue
+                    if not text or len(text) < 5 or len(text) > 300:
+                        continue
+                    if text.endswith("?") or text.endswith(":"):
+                        return text
+        except Exception:
+            pass
+
         return ""
 
     def fill_field(
@@ -179,15 +250,21 @@ class FormFiller:
 
     @staticmethod
     def _fill_dropdown(element: WebElement, answer: str) -> None:
-        """Select an option from a dropdown (select element).
+        """Select an option from a dropdown — native <select> or ARIA combobox.
 
         Tries visible text match first, then partial match, then falls back
         to selecting the first non-empty option.
 
         Args:
-            element: The select WebElement.
+            element: The dropdown WebElement.
             answer: The desired option text.
         """
+        tag = element.tag_name.lower()
+        if tag != "select":
+            # Custom ARIA combobox path
+            FormFiller._fill_custom_combobox(element, answer)
+            return
+
         select = Select(element)
 
         # Try exact visible text match
@@ -217,6 +294,150 @@ class FormFiller:
                     option_text,
                     answer,
                 )
+                return
+
+    @staticmethod
+    def _fill_custom_combobox(element: WebElement, answer: str) -> None:
+        """Fill a custom ARIA combobox by opening it and clicking an option.
+
+        Assumes _get_options_for_field has already opened the listbox. If
+        the listbox is no longer visible we re-open the combobox. The chosen
+        option is matched by exact → substring → first-word; on no match we
+        click the first visible option as a last resort.
+
+        Args:
+            element: The combobox trigger element (button/div).
+            answer: The desired option text.
+        """
+        import time as _time
+        driver = element.parent
+
+        def _find_open_listbox():
+            controls_id = element.get_attribute("aria-controls")
+            if controls_id:
+                try:
+                    lb = driver.find_element(By.ID, controls_id)
+                    if lb.is_displayed():
+                        return lb
+                except Exception:
+                    pass
+            try:
+                candidates = driver.find_elements(
+                    By.CSS_SELECTOR, "[role='listbox'], ul[role='listbox']"
+                )
+                for cand in candidates:
+                    if cand.is_displayed():
+                        return cand
+            except Exception:
+                pass
+            return None
+
+        listbox = _find_open_listbox()
+        if listbox is None:
+            # Re-open the combobox
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+            except Exception:
+                pass
+            try:
+                element.click()
+            except Exception:
+                try:
+                    driver.execute_script("arguments[0].click();", element)
+                except Exception:
+                    logger.warning("Custom combobox: failed to open widget")
+                    return
+            _time.sleep(0.3)
+            listbox = _find_open_listbox()
+
+        if listbox is None:
+            logger.warning("Custom combobox: could not find an open listbox after opening")
+            return
+
+        # Collect options
+        try:
+            option_elems = listbox.find_elements(
+                By.CSS_SELECTOR, "[role='option'], li[role='option']"
+            )
+            if not option_elems:
+                option_elems = listbox.find_elements(By.CSS_SELECTOR, "li")
+        except Exception:
+            option_elems = []
+
+        if not option_elems:
+            logger.warning("Custom combobox: no options found in listbox")
+            return
+
+        answer_lower = answer.lower().strip()
+
+        # Exact match
+        target = None
+        for opt in option_elems:
+            try:
+                text = (opt.text or "").strip()
+            except Exception:
+                continue
+            if text.lower() == answer_lower:
+                target = opt
+                break
+
+        # Substring / containment
+        if target is None:
+            for opt in option_elems:
+                try:
+                    text = (opt.text or "").strip()
+                except Exception:
+                    continue
+                if not text:
+                    continue
+                tl = text.lower()
+                if answer_lower in tl or tl in answer_lower:
+                    target = opt
+                    break
+
+        # Yes/No first-word
+        if target is None:
+            first = answer_lower.split(",")[0].split("/")[0].split()[0] if answer_lower else ""
+            if first in ("yes", "no"):
+                for opt in option_elems:
+                    try:
+                        text = (opt.text or "").strip().lower()
+                    except Exception:
+                        continue
+                    if text.startswith(first):
+                        target = opt
+                        break
+
+        # Last resort: first visible non-empty option
+        if target is None:
+            for opt in option_elems:
+                try:
+                    text = (opt.text or "").strip()
+                except Exception:
+                    continue
+                if text and text.lower() not in ("select", "select an option", "choose"):
+                    target = opt
+                    logger.warning(
+                        "Custom combobox fallback: clicked '%s' (wanted '%s')",
+                        text, answer,
+                    )
+                    break
+
+        if target is None:
+            logger.warning("Custom combobox: no suitable option to click")
+            return
+
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", target)
+        except Exception:
+            pass
+        try:
+            target.click()
+        except Exception:
+            try:
+                driver.execute_script("arguments[0].click();", target)
+            except Exception:
+                logger.warning("Custom combobox: failed to click option")
                 return
 
     @staticmethod

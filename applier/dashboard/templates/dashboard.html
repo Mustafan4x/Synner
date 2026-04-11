@@ -27,69 +27,62 @@
 <!-- ===== Accent Bar ===== -->
 <div class="accent-bar"></div>
 
+<!-- ===== Stat Scope Tabs ===== -->
+<div class="stat-tabs" id="statTabs" role="tablist" aria-label="Statistics scope">
+  {% set session_label = 'Current Session' if data.status == 'running' else 'Previous Session' %}
+  {% set session_key = 'current' if data.status == 'running' else 'previous' %}
+  <button type="button"
+          class="stat-tab{% if data.active_bucket != 'alltime' %} stat-tab--active{% endif %}"
+          data-bucket="{{ session_key }}"
+          role="tab">
+    <span class="stat-tab__label">{{ session_label }}</span>
+  </button>
+  <button type="button"
+          class="stat-tab{% if data.active_bucket == 'alltime' %} stat-tab--active{% endif %}"
+          data-bucket="alltime"
+          role="tab">
+    <span class="stat-tab__label">All Time</span>
+  </button>
+</div>
+
+<!-- Embedded bucket data for client-side tab switching -->
+<script type="application/json" id="bucketData">{{ data.buckets | tojson }}</script>
+<script type="application/json" id="bucketMeta">{{ {
+  "status": data.status,
+  "active": data.active_bucket,
+  "has_previous": data.has_previous
+} | tojson }}</script>
+
 <!-- ===== Stat Cards Row ===== -->
 <div class="grid grid--top">
   <!-- Applied -->
   <div class="card stat-card stat-card--applied">
-    <div class="stat-card__number">{{ data.session.applied }}</div>
+    <div class="stat-card__number" data-stat="applied">{{ data.session.applied }}</div>
     <div class="stat-card__sub">
-      <span class="stat-card__max">/{{ data.alltime.applied }}</span>
-      {% if data.trends.applied > 0 %}
-        <span class="trend trend--up">
-          <span class="trend__arrow">&#x25B2;</span>
-          +{{ data.trends.applied }}%
-        </span>
-      {% else %}
-        <span class="trend trend--down">
-          <span class="trend__arrow">&#x25BC;</span>
-          {{ data.trends.applied }}%
-        </span>
-      {% endif %}
+      <span class="stat-card__max" data-stat-alltime="applied">/{{ data.alltime.applied }}</span>
     </div>
-    <div class="stat-card__label">Applied this session</div>
-    <div class="stat-card__alltime">{{ data.alltime.applied }} all-time</div>
+    <div class="stat-card__label" data-stat-label="applied">Applied</div>
+    <div class="stat-card__alltime" data-stat-alltime-label="applied">{{ data.alltime.applied }} all-time</div>
   </div>
 
   <!-- Skipped -->
   <div class="card stat-card stat-card--skipped">
-    <div class="stat-card__number">{{ data.session.skipped }}</div>
+    <div class="stat-card__number" data-stat="skipped">{{ data.session.skipped }}</div>
     <div class="stat-card__sub">
-      <span class="stat-card__max">/{{ data.alltime.skipped }}</span>
-      {% if data.trends.skipped > 0 %}
-        <span class="trend trend--up">
-          <span class="trend__arrow">&#x25B2;</span>
-          +{{ data.trends.skipped }}%
-        </span>
-      {% else %}
-        <span class="trend trend--down">
-          <span class="trend__arrow">&#x25BC;</span>
-          {{ data.trends.skipped }}%
-        </span>
-      {% endif %}
+      <span class="stat-card__max" data-stat-alltime="skipped">/{{ data.alltime.skipped }}</span>
     </div>
-    <div class="stat-card__label">Skipped this session</div>
-    <div class="stat-card__alltime">{{ data.alltime.skipped }} all-time</div>
+    <div class="stat-card__label" data-stat-label="skipped">Skipped</div>
+    <div class="stat-card__alltime" data-stat-alltime-label="skipped">{{ data.alltime.skipped }} all-time</div>
   </div>
 
   <!-- Failed -->
   <div class="card stat-card stat-card--failed">
-    <div class="stat-card__number">{{ data.session.failed }}</div>
+    <div class="stat-card__number" data-stat="failed">{{ data.session.failed }}</div>
     <div class="stat-card__sub">
-      <span class="stat-card__max">/{{ data.alltime.failed }}</span>
-      {% if data.trends.failed > 0 %}
-        <span class="trend trend--up">
-          <span class="trend__arrow">&#x25B2;</span>
-          +{{ data.trends.failed }}%
-        </span>
-      {% else %}
-        <span class="trend trend--down">
-          <span class="trend__arrow">&#x25BC;</span>
-          {{ data.trends.failed }}%
-        </span>
-      {% endif %}
+      <span class="stat-card__max" data-stat-alltime="failed">/{{ data.alltime.failed }}</span>
     </div>
-    <div class="stat-card__label">Failed this session</div>
-    <div class="stat-card__alltime">{{ data.alltime.failed }} all-time</div>
+    <div class="stat-card__label" data-stat-label="failed">Failed</div>
+    <div class="stat-card__alltime" data-stat-alltime-label="failed">{{ data.alltime.failed }} all-time</div>
   </div>
 </div>
 
@@ -100,9 +93,9 @@
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z"/>
     </svg>
   </div>
-  <div class="banner__text">
-    You've applied to <strong>{{ data.session.applied }} jobs</strong> this session across {{ data.categories | length }} categories.
-    Keeping a {{ data.success_rate }}% success rate. Keep it up!
+  <div class="banner__text" data-banner>
+    You've applied to <strong data-stat="applied">{{ data.session.applied }} jobs</strong> <span data-banner-scope>in view</span> across {{ data.categories | length }} categories.
+    Keeping a <span data-stat="success_rate">{{ data.success_rate }}</span>% success rate. Keep it up!
   </div>
 </div>
 
@@ -116,33 +109,34 @@
       <div class="card__header">
         <h2 class="card__title">Category Breakdown</h2>
       </div>
-      <div class="grid--categories">
+      <div class="grid--categories" data-cat-grid>
         {% for cat, vals in data.categories.items() %}
-        <div class="card cat-card">
+        <div class="card cat-card" data-cat="{{ cat }}">
           <div class="cat-card__header">
             <div class="cat-card__name">
               <span class="cat-card__badge cat-card__badge--{{ cat }}">{{ cat }}</span>
             </div>
             <div class="cat-card__fraction">
-              {{ vals.applied }}<span>/{{ vals.limit }}</span>
+              <span data-cat-applied>{{ vals.applied }}</span><span>/<span data-cat-limit>{{ vals.limit }}</span></span>
             </div>
           </div>
           <div class="progress-bar">
             <div class="progress-bar__fill progress-bar__fill--{{ cat }}"
+                 data-cat-progress
                  style="width: {{ (vals.applied / vals.limit * 100) | round(1) }}%"></div>
           </div>
           <div class="cat-card__stats">
             <span class="cat-card__stat">
               <span class="cat-card__dot cat-card__dot--applied"></span>
-              {{ vals.applied }} applied
+              <span data-cat-applied>{{ vals.applied }}</span> applied
             </span>
             <span class="cat-card__stat">
               <span class="cat-card__dot cat-card__dot--skipped"></span>
-              {{ vals.skipped }} skipped
+              <span data-cat-skipped>{{ vals.skipped }}</span> skipped
             </span>
             <span class="cat-card__stat">
               <span class="cat-card__dot cat-card__dot--failed"></span>
-              {{ vals.failed }} failed
+              <span data-cat-failed>{{ vals.failed }}</span> failed
             </span>
           </div>
         </div>
@@ -201,9 +195,9 @@
       <div class="card__header" style="justify-content: center;">
         <h2 class="card__title">Success Rate</h2>
       </div>
-      <div class="score__number">{{ data.success_rate }}%</div>
+      <div class="score__number"><span data-stat="success_rate">{{ data.success_rate }}</span>%</div>
       <div class="score__label">Application Success</div>
-      <div class="score__sublabel">{{ data.session.applied }} of {{ data.session.total }} attempts</div>
+      <div class="score__sublabel"><span data-stat="applied">{{ data.session.applied }}</span> of <span data-stat="total">{{ data.session.total }}</span> attempts</div>
 
       <!-- Radar Chart -->
       <div class="radar-wrap">
@@ -211,16 +205,16 @@
       </div>
 
       <!-- Category Breakdown List -->
-      <div class="breakdown">
+      <div class="breakdown" data-breakdown>
         <h3 class="breakdown__title">Distribution</h3>
         {% set colors = {'SWE': '#3B82F6', 'FS': '#8B5CF6', 'MLAI': '#F59E0B', 'DE': '#10B981'} %}
         {% for cat, val in data.radar.items() %}
-        <div class="breakdown__item">
+        <div class="breakdown__item" data-breakdown-cat="{{ cat }}">
           <div class="breakdown__left">
             <span class="breakdown__dot" style="background: {{ colors[cat] }};"></span>
             <span class="breakdown__cat">{{ cat }}</span>
           </div>
-          <span class="breakdown__val">{{ (val * 100) | round(0) | int }}%</span>
+          <span class="breakdown__val" data-breakdown-val>{{ (val * 100) | round(0) | int }}%</span>
         </div>
         {% endfor %}
       </div>
@@ -264,99 +258,228 @@
   var cx = size / 2;
   var cy = size / 2;
   var maxR = 100;
-
-  var labels = {{ data.radar.keys() | list | tojson }};
-  var values = {{ data.radar.values() | list | tojson }};
-  var n = labels.length;
-  var angleStep = (2 * Math.PI) / n;
   var startAngle = -Math.PI / 2;
 
   function pointOnCircle(cx, cy, r, angle) {
     return [cx + r * Math.cos(angle), cy + r * Math.sin(angle)];
   }
 
-  // Draw grid rings
-  var rings = [0.25, 0.5, 0.75, 1.0];
-  ctx.strokeStyle = '#E5E0DA';
-  ctx.lineWidth = 1;
-  for (var ri = 0; ri < rings.length; ri++) {
-    var r = maxR * rings[ri];
+  function drawRadar(labels, values) {
+    var n = labels.length;
+    if (n === 0) return;
+    var angleStep = (2 * Math.PI) / n;
+
+    // Clear
+    ctx.clearRect(0, 0, size, size);
+
+    // Grid rings
+    var rings = [0.25, 0.5, 0.75, 1.0];
+    ctx.strokeStyle = '#E5E0DA';
+    ctx.lineWidth = 1;
+    for (var ri = 0; ri < rings.length; ri++) {
+      var r = maxR * rings[ri];
+      ctx.beginPath();
+      for (var i = 0; i < n; i++) {
+        var a = startAngle + i * angleStep;
+        var p = pointOnCircle(cx, cy, r, a);
+        if (i === 0) ctx.moveTo(p[0], p[1]);
+        else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.closePath();
+      ctx.stroke();
+    }
+
+    // Axes
+    ctx.strokeStyle = '#D5D0CA';
+    ctx.lineWidth = 1;
+    for (var i = 0; i < n; i++) {
+      var a = startAngle + i * angleStep;
+      var p = pointOnCircle(cx, cy, maxR, a);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(p[0], p[1]);
+      ctx.stroke();
+    }
+
+    // Data polygon
     ctx.beginPath();
     for (var i = 0; i < n; i++) {
       var a = startAngle + i * angleStep;
+      var r = maxR * Math.max(0, Math.min(1, values[i] || 0));
       var p = pointOnCircle(cx, cy, r, a);
       if (i === 0) ctx.moveTo(p[0], p[1]);
       else ctx.lineTo(p[0], p[1]);
     }
     ctx.closePath();
-    ctx.stroke();
-  }
 
-  // Draw axes
-  ctx.strokeStyle = '#D5D0CA';
-  ctx.lineWidth = 1;
-  for (var i = 0; i < n; i++) {
-    var a = startAngle + i * angleStep;
-    var p = pointOnCircle(cx, cy, maxR, a);
-    ctx.beginPath();
-    ctx.moveTo(cx, cy);
-    ctx.lineTo(p[0], p[1]);
-    ctx.stroke();
-  }
-
-  // Draw data polygon with gradient fill
-  ctx.beginPath();
-  for (var i = 0; i < n; i++) {
-    var a = startAngle + i * angleStep;
-    var r = maxR * values[i];
-    var p = pointOnCircle(cx, cy, r, a);
-    if (i === 0) ctx.moveTo(p[0], p[1]);
-    else ctx.lineTo(p[0], p[1]);
-  }
-  ctx.closePath();
-
-  // Gradient fill matching design.webp purple-to-gold mesh
-  var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
-  grad.addColorStop(0, 'rgba(168, 85, 247, 0.35)');
-  grad.addColorStop(0.5, 'rgba(251, 191, 36, 0.25)');
-  grad.addColorStop(1, 'rgba(244, 114, 182, 0.20)');
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  // Stroke the polygon
-  var strokeGrad = ctx.createLinearGradient(cx - maxR, cy, cx + maxR, cy);
-  strokeGrad.addColorStop(0, '#A855F7');
-  strokeGrad.addColorStop(0.5, '#FBBF24');
-  strokeGrad.addColorStop(1, '#F472B6');
-  ctx.strokeStyle = strokeGrad;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-
-  // Draw data points
-  var dotColors = ['#3B82F6', '#8B5CF6', '#F59E0B', '#10B981'];
-  for (var i = 0; i < n; i++) {
-    var a = startAngle + i * angleStep;
-    var r = maxR * values[i];
-    var p = pointOnCircle(cx, cy, r, a);
-    ctx.beginPath();
-    ctx.arc(p[0], p[1], 4, 0, 2 * Math.PI);
-    ctx.fillStyle = dotColors[i % dotColors.length];
+    var grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR);
+    grad.addColorStop(0, 'rgba(168, 85, 247, 0.35)');
+    grad.addColorStop(0.5, 'rgba(251, 191, 36, 0.25)');
+    grad.addColorStop(1, 'rgba(244, 114, 182, 0.20)');
+    ctx.fillStyle = grad;
     ctx.fill();
-    ctx.strokeStyle = '#FFFFFF';
+
+    var strokeGrad = ctx.createLinearGradient(cx - maxR, cy, cx + maxR, cy);
+    strokeGrad.addColorStop(0, '#A855F7');
+    strokeGrad.addColorStop(0.5, '#FBBF24');
+    strokeGrad.addColorStop(1, '#F472B6');
+    ctx.strokeStyle = strokeGrad;
     ctx.lineWidth = 2;
     ctx.stroke();
+
+    // Data points
+    var dotColors = ['#3B82F6', '#8B5CF6', '#F59E0B', '#10B981'];
+    for (var i = 0; i < n; i++) {
+      var a = startAngle + i * angleStep;
+      var r = maxR * Math.max(0, Math.min(1, values[i] || 0));
+      var p = pointOnCircle(cx, cy, r, a);
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], 4, 0, 2 * Math.PI);
+      ctx.fillStyle = dotColors[i % dotColors.length];
+      ctx.fill();
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    // Labels
+    ctx.fillStyle = '#6B6560';
+    ctx.font = '500 12px "DM Sans", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (var i = 0; i < n; i++) {
+      var a = startAngle + i * angleStep;
+      var p = pointOnCircle(cx, cy, maxR + 18, a);
+      ctx.fillText(labels[i], p[0], p[1]);
+    }
   }
 
-  // Draw labels
-  ctx.fillStyle = '#6B6560';
-  ctx.font = '500 12px "DM Sans", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  for (var i = 0; i < n; i++) {
-    var a = startAngle + i * angleStep;
-    var p = pointOnCircle(cx, cy, maxR + 18, a);
-    ctx.fillText(labels[i], p[0], p[1]);
+  // --- Bucket tab switching ---
+  var bucketData = {};
+  var bucketMeta = {status: 'idle', active: 'alltime', has_previous: false};
+  try {
+    var bdEl = document.getElementById('bucketData');
+    var bmEl = document.getElementById('bucketMeta');
+    if (bdEl) bucketData = JSON.parse(bdEl.textContent);
+    if (bmEl) bucketMeta = JSON.parse(bmEl.textContent);
+  } catch (e) { /* ignore */ }
+
+  var allTimeBucket = bucketData.alltime || {applied:0,skipped:0,failed:0,total:0,success_rate:0,categories:{},radar:{}};
+
+  function setText(selector, value) {
+    var els = document.querySelectorAll(selector);
+    for (var i = 0; i < els.length; i++) {
+      els[i].textContent = String(value);
+    }
   }
+
+  function renderBucket(key) {
+    var bucket = bucketData[key] || allTimeBucket;
+    // Stat card numbers
+    setText('[data-stat="applied"]', bucket.applied);
+    setText('[data-stat="skipped"]', bucket.skipped);
+    setText('[data-stat="failed"]', bucket.failed);
+    setText('[data-stat="total"]', bucket.total);
+    setText('[data-stat="success_rate"]', bucket.success_rate);
+
+    // Always-shown "/alltime" subscript on stat cards
+    var altApplied = document.querySelectorAll('[data-stat-alltime="applied"]');
+    for (var i = 0; i < altApplied.length; i++) altApplied[i].textContent = '/' + allTimeBucket.applied;
+    var altSkipped = document.querySelectorAll('[data-stat-alltime="skipped"]');
+    for (var j = 0; j < altSkipped.length; j++) altSkipped[j].textContent = '/' + allTimeBucket.skipped;
+    var altFailed = document.querySelectorAll('[data-stat-alltime="failed"]');
+    for (var k = 0; k < altFailed.length; k++) altFailed[k].textContent = '/' + allTimeBucket.failed;
+    setText('[data-stat-alltime-label="applied"]', allTimeBucket.applied + ' all-time');
+    setText('[data-stat-alltime-label="skipped"]', allTimeBucket.skipped + ' all-time');
+    setText('[data-stat-alltime-label="failed"]', allTimeBucket.failed + ' all-time');
+
+    // Banner scope label
+    var scopeLabel = key === 'current' ? 'this session' : (key === 'previous' ? 'last session' : 'all time');
+    var scopeEl = document.querySelector('[data-banner-scope]');
+    if (scopeEl) scopeEl.textContent = scopeLabel;
+
+    // Category cards
+    var cats = bucket.categories || {};
+    var catCards = document.querySelectorAll('[data-cat]');
+    for (var c = 0; c < catCards.length; c++) {
+      var card = catCards[c];
+      var cat = card.getAttribute('data-cat');
+      var vals = cats[cat] || {applied:0,skipped:0,failed:0,limit:30};
+      var appliedEls = card.querySelectorAll('[data-cat-applied]');
+      for (var ae = 0; ae < appliedEls.length; ae++) appliedEls[ae].textContent = vals.applied;
+      var skippedEls = card.querySelectorAll('[data-cat-skipped]');
+      for (var se = 0; se < skippedEls.length; se++) skippedEls[se].textContent = vals.skipped;
+      var failedEls = card.querySelectorAll('[data-cat-failed]');
+      for (var fe = 0; fe < failedEls.length; fe++) failedEls[fe].textContent = vals.failed;
+      var limitEls = card.querySelectorAll('[data-cat-limit]');
+      for (var le = 0; le < limitEls.length; le++) limitEls[le].textContent = vals.limit;
+      var pct = vals.limit > 0 ? Math.min(100, (vals.applied / vals.limit) * 100) : 0;
+      var prog = card.querySelector('[data-cat-progress]');
+      if (prog) prog.style.width = pct.toFixed(1) + '%';
+    }
+
+    // Distribution list
+    var radar = bucket.radar || {};
+    var breakdownItems = document.querySelectorAll('[data-breakdown-cat]');
+    for (var b = 0; b < breakdownItems.length; b++) {
+      var item = breakdownItems[b];
+      var cat2 = item.getAttribute('data-breakdown-cat');
+      var val = radar[cat2] || 0;
+      var valEl = item.querySelector('[data-breakdown-val]');
+      if (valEl) valEl.textContent = Math.round(val * 100) + '%';
+    }
+
+    // Radar chart
+    var radarLabels = Object.keys(radar);
+    var radarValues = radarLabels.map(function(k) { return radar[k]; });
+    drawRadar(radarLabels, radarValues);
+  }
+
+  // Initial render
+  renderBucket(bucketMeta.active || 'alltime');
+
+  // Tab click handlers
+  var tabs = document.querySelectorAll('#statTabs .stat-tab');
+  for (var t = 0; t < tabs.length; t++) {
+    tabs[t].addEventListener('click', function() {
+      var target = this.getAttribute('data-bucket');
+      for (var tt = 0; tt < tabs.length; tt++) tabs[tt].classList.remove('stat-tab--active');
+      this.classList.add('stat-tab--active');
+      renderBucket(target);
+    });
+  }
+
+  // Poll /api/stats every 3s to refresh bucket data so the active tab stays current
+  function refreshBuckets() {
+    fetch('/api/stats').then(function(r) { return r.json(); }).then(function(payload) {
+      if (payload && payload.buckets) {
+        bucketData = payload.buckets;
+        allTimeBucket = bucketData.alltime || allTimeBucket;
+        // Rebind tab labels if status changed (running <-> idle)
+        var newStatus = payload.status || 'idle';
+        if (newStatus !== bucketMeta.status) {
+          var sessionTab = document.querySelector('#statTabs .stat-tab[data-bucket="current"], #statTabs .stat-tab[data-bucket="previous"]');
+          if (sessionTab) {
+            if (newStatus === 'running') {
+              sessionTab.setAttribute('data-bucket', 'current');
+              var lbl = sessionTab.querySelector('.stat-tab__label');
+              if (lbl) lbl.textContent = 'Current Session';
+            } else {
+              sessionTab.setAttribute('data-bucket', 'previous');
+              var lbl2 = sessionTab.querySelector('.stat-tab__label');
+              if (lbl2) lbl2.textContent = 'Previous Session';
+            }
+          }
+          bucketMeta.status = newStatus;
+        }
+        // Re-render whichever tab is currently active
+        var active = document.querySelector('#statTabs .stat-tab--active');
+        var activeKey = active ? active.getAttribute('data-bucket') : 'alltime';
+        renderBucket(activeKey);
+      }
+    }).catch(function() { /* ignore */ });
+  }
+  setInterval(refreshBuckets, 3000);
 
   // --- SSE Real-time Updates ---
   (function initSSE() {

@@ -25,12 +25,12 @@ def sample_resume() -> dict:
     """Return a valid resume dictionary matching plain_text_resume.yaml schema."""
     return {
         "personal": {
-            "name": "Mustafa Nazeer",
-            "email": "Mustafa421670@gmail.com",
-            "phone": "682-552-0927",
+            "name": "Test User",
+            "email": "testuser@example.com",
+            "phone": "555-555-0100",
             "location": "Arlington, TX",
-            "linkedin": "linkedin.com/in/mustafa-nazeer",
-            "github": "github.com/Mustafan4x",
+            "linkedin": "linkedin.com/in/test-user",
+            "github": "github.com/test-user",
         },
         "education": {
             "school": "University of Texas at Arlington",

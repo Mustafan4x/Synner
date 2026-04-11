@@ -140,17 +140,35 @@ _DESCRIPTION_SELECTORS = [
 
 
 def _clean_profile_crash_flag(profile_dir: str) -> None:
-    """Clear Chrome's 'exited_cleanly' flag and stale lock files."""
+    """Clear Chrome's crash flag, stale lock files, and session-restore state."""
     profile = Path(profile_dir)
 
-    # Remove stale lock files left by crashed Chrome processes
+    # Remove stale lock files left by crashed Chrome processes.
+    # These are symlinks (e.g. SingletonLock -> HOSTNAME-PID), and when the
+    # target disappears they become dangling symlinks. Path.exists() follows
+    # symlinks so it returns False for dangling ones, hiding them from any
+    # existence check — we must unlink blindly and catch FileNotFoundError.
     for lock_file in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
         lock_path = profile / lock_file
-        if lock_path.exists():
+        try:
+            lock_path.unlink()
+            log.debug("Removed stale lock: %s", lock_file)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+    # Clear Chrome's session-restore state. Without this, Chrome reopens
+    # whatever tabs were visible last time (e.g. a Google new-tab), which
+    # sits on top of the automation's LinkedIn tab and makes it look like
+    # the bot never navigated to LinkedIn. The automation always starts
+    # fresh, so there's nothing worth restoring.
+    sessions_dir = profile / "Default" / "Sessions"
+    if sessions_dir.exists():
+        for entry in sessions_dir.iterdir():
             try:
-                lock_path.unlink()
-                log.debug("Removed stale lock: %s", lock_file)
-            except OSError:
+                entry.unlink()
+            except (FileNotFoundError, OSError):
                 pass
 
     # Fix the exited_cleanly flag in Preferences.
@@ -215,7 +233,10 @@ def create_driver(cfg: dict) -> uc.Chrome:
     options.add_argument("--disable-features=InfiniteSessionRestore")
 
     driver = uc.Chrome(options=options)
-    driver.maximize_window()
+    # Note: do NOT call driver.maximize_window() here. Chrome 140+ with
+    # undetected-chromedriver raises "Browser window not found" because the
+    # DevTools target isn't ready yet. The --window-size arg above already
+    # sizes the window, so maximize is unnecessary.
     # Keep implicit wait short — we use explicit WebDriverWait where
     # longer timeouts are needed.  A long implicit wait causes massive
     # delays in helper functions that try multiple selectors.
@@ -602,15 +623,29 @@ def _get_modal(driver: uc.Chrome) -> object | None:
 def _find_form_fields(modal) -> list:
     """Locate all fillable form fields inside the Easy Apply modal."""
     fields: list = []
+    seen_ids: set[int] = set()
     selectors = [
         "input:not([type='hidden']):not([type='submit']):not([type='button'])",
         "textarea",
         "select",
+        # Custom ARIA comboboxes — LinkedIn uses these for some dropdowns
+        # instead of native <select>. Handled by the custom-combobox branch
+        # in form_filler._fill_dropdown.
+        "[role='combobox']",
+        "button[aria-haspopup='listbox']",
+        "div[aria-haspopup='listbox']",
     ]
     for sel in selectors:
         try:
             found = modal.find_elements(By.CSS_SELECTOR, sel)
-            fields.extend(found)
+            for elem in found:
+                # Dedupe in case the same element matches multiple selectors
+                # (e.g. an input that also has role="combobox").
+                key = id(elem._id) if hasattr(elem, "_id") else id(elem)
+                if key in seen_ids:
+                    continue
+                seen_ids.add(key)
+                fields.append(elem)
         except StaleElementReferenceException:
             continue
     return fields
@@ -628,14 +663,18 @@ def _click_modal_button(driver: uc.Chrome, selectors: list[str], label_texts: li
     Returns:
         True if a button was successfully clicked.
     """
+    # Direct find — no per-selector WebDriverWait. The modal DOM is already
+    # settled by the caller's page-transition sleep, so waiting 3s per missing
+    # button just burns time (LinkedIn shows only one of Submit/Review/Next
+    # at a time, so two of the three probes always miss).
     for sel in selectors:
         try:
-            btn = WebDriverWait(driver, 3).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, sel))
-            )
+            btn = driver.find_element(By.CSS_SELECTOR, sel)
+            if not btn.is_displayed() or not btn.is_enabled():
+                continue
             btn.click()
             return True
-        except (TimeoutException, ElementClickInterceptedException, ElementNotInteractableException, NoSuchElementException):
+        except (NoSuchElementException, ElementClickInterceptedException, ElementNotInteractableException, StaleElementReferenceException):
             continue
 
     # Text-based fallback
@@ -706,6 +745,71 @@ def _get_options_for_field(modal, element) -> list[str] | None:
         except Exception:
             return None
 
+    # Custom ARIA combobox: open the widget, read its listbox, leave it
+    # open so _fill_dropdown can click the chosen option without having to
+    # re-open. If the widget is already open (some LinkedIn variants mount
+    # the listbox eagerly), we read without clicking again.
+    role = (element.get_attribute("role") or "").lower()
+    haspopup = (element.get_attribute("aria-haspopup") or "").lower()
+    if role == "combobox" or haspopup == "listbox":
+        try:
+            driver = element.parent
+            expanded = (element.get_attribute("aria-expanded") or "").lower()
+            if expanded != "true":
+                try:
+                    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+                except Exception:
+                    pass
+                try:
+                    element.click()
+                except (ElementClickInterceptedException, ElementNotInteractableException):
+                    driver.execute_script("arguments[0].click();", element)
+                time.sleep(0.3)  # allow listbox to render
+
+            listbox = None
+            controls_id = element.get_attribute("aria-controls")
+            if controls_id:
+                try:
+                    listbox = driver.find_element(By.ID, controls_id)
+                except NoSuchElementException:
+                    listbox = None
+            if listbox is None:
+                # Find the first visible listbox anywhere in the document
+                try:
+                    candidates = driver.find_elements(By.CSS_SELECTOR, "[role='listbox'], ul[role='listbox']")
+                    for cand in candidates:
+                        if cand.is_displayed():
+                            listbox = cand
+                            break
+                except Exception:
+                    pass
+
+            if listbox is None:
+                return None
+
+            opts: list[str] = []
+            try:
+                option_elems = listbox.find_elements(
+                    By.CSS_SELECTOR, "[role='option'], li[role='option']"
+                )
+                if not option_elems:
+                    # Fallback: any direct children with visible text
+                    option_elems = listbox.find_elements(By.CSS_SELECTOR, "li, [role='menuitem']")
+                for opt in option_elems:
+                    try:
+                        text = (opt.text or "").strip()
+                    except Exception:
+                        continue
+                    if text and text.lower() not in (
+                        "select", "select an option", "select...", "choose", "-- select --"
+                    ):
+                        opts.append(text)
+            except Exception:
+                return None
+            return opts if opts else None
+        except Exception:
+            return None
+
     input_type = (element.get_attribute("type") or "").lower()
     if input_type == "radio":
         name = element.get_attribute("name")
@@ -748,6 +852,7 @@ def apply_to_job(
     resume_path: str,
     form_filler: FormFiller,
     dry_run: bool = False,
+    resume_state: dict | None = None,
 ) -> tuple[str, str]:
     """Apply to a single job via Easy Apply.
 
@@ -826,6 +931,28 @@ def apply_to_job(
         modal = _get_modal(driver)
         if modal is None:
             break
+
+        # Detect the "Top choice" page (LinkedIn Premium feature, only 3 uses
+        # per month) — we never want to spend one, so skip field processing
+        # entirely and just click Next.
+        try:
+            modal_text = (modal.text or "").lower()
+        except StaleElementReferenceException:
+            modal_text = ""
+        if "top choice" in modal_text:
+            log.debug("Top choice page detected, skipping straight to Next")
+            if _click_modal_button(driver, _NEXT_BUTTON_SELECTORS, ["next", "continue"]):
+                continue
+            # Fall through to normal button handling if Next click failed
+
+        # Detect the "Contact info" page — LinkedIn's first Easy Apply page,
+        # always pre-filled from profile. No reason to inspect fields; jump
+        # straight to Next.
+        if "contact info" in modal_text:
+            log.debug("Contact info page detected, skipping straight to Next")
+            if _click_modal_button(driver, _NEXT_BUTTON_SELECTORS, ["next", "continue"]):
+                continue
+
         fields = _find_form_fields(modal)
 
         for field in fields:
@@ -833,10 +960,22 @@ def apply_to_job(
                 field_type = form_filler.detect_field_type(field)
 
                 if field_type == "file":
-                    # Upload resume
+                    # Skip re-upload if LinkedIn already has this resume from
+                    # an earlier application in the same run — it auto-selects
+                    # the most recent upload, so touching the file input again
+                    # just triggers a slow re-parse.
+                    already_uploaded = (
+                        resume_state is not None
+                        and resume_state.get("last_uploaded") == resume_path
+                    )
+                    if already_uploaded:
+                        log.debug("Resume already uploaded this run, reusing: %s", resume_path)
+                        continue
                     try:
                         field.send_keys(resume_path)
                         log.debug("Uploaded resume: %s", resume_path)
+                        if resume_state is not None:
+                            resume_state["last_uploaded"] = resume_path
                     except Exception as exc:
                         log.warning("Resume upload failed: %s", exc)
                     continue
@@ -939,6 +1078,7 @@ def run_category(
     stats: dict,
     shutdown_check: callable | None = None,
     dry_run: bool = False,
+    resume_state: dict | None = None,
 ) -> None:
     """Run the full search-and-apply loop for one job category.
 
@@ -1127,6 +1267,7 @@ def run_category(
                 try:
                     status, apply_reason = apply_to_job(
                         driver, job, resume_path, filler, dry_run=dry_run,
+                        resume_state=resume_state,
                     )
                 except Exception as exc:
                     log.warning("Exception during apply: %s", exc)
@@ -1136,6 +1277,15 @@ def run_category(
                         _dismiss_modal(driver)
                     except Exception:
                         pass
+
+                # "Already applied" isn't a real skip — the bot made no
+                # decision about whether the job was a good fit, LinkedIn
+                # just told us we'd already submitted. Don't log it to CSV
+                # and don't count it in the session stats; it would pollute
+                # the success-rate numbers and inflate the skipped bucket.
+                if status == "skipped" and apply_reason == "already applied":
+                    log.info("Already applied, silently skipping")
+                    continue
 
                 status_upper = status.upper()
                 app_logger.log_application(

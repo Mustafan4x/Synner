@@ -47,8 +47,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--category",
         choices=CATEGORIES,
+        nargs="+",
         default=None,
-        help="Run a single resume category instead of all four",
+        help="Run one or more resume categories (space-separated). Defaults to all four.",
     )
     parser.add_argument(
         "--dry-run",
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> None:
     max_session: int = config.get("max_applications_per_session", 100)
     max_category: int = config.get("max_per_category", 30)
 
-    categories = [args.category] if args.category else CATEGORIES
+    categories = args.category if args.category else CATEGORIES
 
     # Install Ctrl+C handler
     signal.signal(signal.SIGINT, _handle_sigint)
@@ -120,6 +121,12 @@ def main(argv: list[str] | None = None) -> None:
 
     total_applied: int = 0
     session_stats: dict[str, dict[str, int]] = {}
+
+    # Tracks the last resume path uploaded to LinkedIn in this run so we can
+    # skip re-uploading the same file on subsequent applications. LinkedIn
+    # remembers the most recent upload and auto-selects it; switching
+    # categories causes resume_path to change, triggering a fresh upload.
+    resume_state: dict[str, str | None] = {"last_uploaded": None}
 
     print("=" * 60)
     print("Synner — LinkedIn Easy Apply Bot")
@@ -161,6 +168,7 @@ def main(argv: list[str] | None = None) -> None:
                     stats=stats,
                     shutdown_check=lambda: _shutdown_requested,
                     dry_run=args.dry_run,
+                    resume_state=resume_state,
                 )
             except KeyboardInterrupt:
                 _shutdown_requested = True
@@ -168,7 +176,34 @@ def main(argv: list[str] | None = None) -> None:
             except Exception as exc:
                 if _shutdown_requested:
                     break  # Chrome likely closed during shutdown
-                print(f"\n[!] Error in category {category}: {exc}")
+
+                # Detect the "Chrome window was closed externally" case and
+                # give a clear, actionable message instead of a raw Selenium
+                # stack trace. The bot never calls driver.quit() mid-run, so
+                # this error means something outside the automation (user
+                # clicking X, window manager, system OOM) killed Chrome.
+                msg = str(exc).lower()
+                if (
+                    "invalid session id" in msg
+                    or "session deleted" in msg
+                    or "chrome not reachable" in msg
+                    or "not connected to devtools" in msg
+                ):
+                    print()
+                    print("=" * 60)
+                    print("  [!] Chrome window was closed before the session finished.")
+                    print()
+                    print("  The bot was actively processing jobs on LinkedIn when")
+                    print("  the browser window disappeared. Common causes:")
+                    print("    • The Chrome window was closed manually (the X button)")
+                    print("    • A window manager / Wayland compositor closed it")
+                    print("    • The system killed Chrome (out of memory, etc.)")
+                    print()
+                    print("  The session will stop now. Click Start Session to try")
+                    print("  again, and leave the automation Chrome window alone.")
+                    print("=" * 60)
+                else:
+                    print(f"\n[!] Error in category {category}: {exc}")
                 break
 
             session_stats[category] = stats

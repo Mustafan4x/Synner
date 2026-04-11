@@ -1,6 +1,10 @@
 chrome_profile/
 applications.csv
 config.yaml
+plain_text_resume.yaml
 __pycache__/
 *.pyc
 .env
+.session_log
+venv/
+*.log
